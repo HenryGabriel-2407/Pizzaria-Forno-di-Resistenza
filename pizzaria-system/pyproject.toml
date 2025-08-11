@@ -1,0 +1,43 @@
+[tool.poetry]
+name = "pizzaria-system"
+version = "0.1.0"
+description = ""
+authors = ["Henry Gabriel <63942305+HenryGabriel-2407@users.noreply.github.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+pydantic-settings = "^2.10.1"
+ruff = "^0.12.8"
+taskipy = "^1.14.1"
+pytest = "^8.4.1"
+fastapi = {extras = ["standard"], version = "^0.116.1"}
+pydantic = "^2.11.7"
+sqlalchemy = "^2.0.42"
+httpx = "^0.28.1"
+alembic = "^1.16.4"
+pyjwt = "^2.10.1"
+pytest-cov = "^6.2.1"
+pwdlib = {extras = ["argon2"], version = "^0.2.1"}
+psycopg2-binary = "^2.9.10"
+psycopg = {extras = ["binary"], version = "^3.2.9"}
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ['migrations']
+
+[tool.ruff.lint]
+preview = true
+select = ['I', 'F', 'E', 'W', 'PL', 'PT']
+
+[tool.taskipy.tasks]
+run = 'fastapi dev pizzaria_system/app.py'
+test = 'pytest -s -x --cov=pizzaria_system -vv'
+post_test = 'coverage html'
+lint = 'ruff check . && ruff check . --diff'
+format = 'ruff check . --fix && ruff format .'
+pre_test = 'task lint'
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
