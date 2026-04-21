@@ -1,0 +1,456 @@
+@import url('https://fonts.googleapis.com/css2?family=Stardos+Stencil:wght@400;700&display=swap');
+.stardos-stencil-regular {
+  font-family: "Stardos Stencil", system-ui;
+  font-weight: 400;
+  font-style: normal;
+}
+
+.stardos-stencil-bold {
+  font-family: "Stardos Stencil", system-ui;
+  font-weight: 700;
+  font-style: normal;
+}
+
+html {
+    scroll-behavior: smooth;
+}
+
+
+.body{
+    background-color: #F5F0E6;
+    font-family: "Stardos Stencil", system-ui;
+}
+.topo-pagina{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 20px;
+    background-color: #1c1c1c ;
+}
+.logo img{
+    width: 100px;
+    border-radius: 50px;
+}
+nav {
+    display: flex;
+    align-items: center;
+}
+nav ul{
+    list-style: none;           /* tira as bolinhas */
+    display: flex;              /* coloca os itens lado a lado */
+    gap: 15px;                  /* espaço entre os itens */
+    margin: 0;
+    padding: 0;
+}
+nav ul li{
+    font-family: "Stardos Stencil", system-ui;
+    display: flex;
+    align-items: center;
+    padding-left: 10px;
+    padding-right: 10px;
+    color: #F5F0E6;
+    font-size: 17px;
+    cursor: pointer;
+}
+nav ul li:hover{
+    color: #7E2B2B;
+}
+nav ul li a {
+    color: #F5F0E6;       /* mesma cor dos itens do menu */
+    text-decoration: none; /* remove sublinhado */
+    font-family: "Stardos Stencil", system-ui;
+}
+
+nav ul li a:hover {
+    color: #7E2B2B;       /* mesma lógica do hover do li */
+}
+
+
+.topo-pagina button {
+    position: relative;
+    background-color: #F5F0E6;
+    color: #1c1c1c;
+    font-family: "Stardos Stencil", system-ui;
+    font-weight: 700;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    overflow: hidden; /* fundamental para a animação */
+    z-index: 1;
+    transition: transform 0.2s, color 0.2s;
+}
+
+.btn-italiana {
+    display: inline-block;
+    border-radius: 8px; /* raio das pontas */
+    padding: 3px;        /* largura da borda */
+    background: linear-gradient(to right, #008000, #FFFFFF, #FF0000);
+}
+
+.btn-italiana button {
+    background-color: #F5F0E6;
+    color: #1c1c1c;
+    font-family: "Stardos Stencil", system-ui;
+    font-weight: 700;
+    border: none;
+    border-radius: 5px;  /* ligeiramente menor que o contêiner */
+    padding: 10px 20px;
+    cursor: pointer;
+    transition: transform 0.2s;
+}
+
+.btn-italiana button:hover {
+    transform: scale(1.05);
+}
+
+
+
+.banner {
+    position: relative; /* necessário pro ::before */
+    padding: 10px 20px;
+    height: 400px;
+    background-image: url("/Imagens/imagem-fundo-pizza-fogo-lenha.jpg");
+    background-size: cover;
+    background-position: center;
+    display: flex;
+    align-items: center;
+    padding-left: 40px;
+    color: #F5F0E6;
+    overflow: hidden;
+}
+
+.banner::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 60%;  /* cobre só metade da imagem */
+    height: 100%;
+    background: linear-gradient(to right, rgba(0,0,0,0.8), rgba(0,0,0,0));
+    z-index: 1;
+}
+
+.banner blockquote {
+    position: relative; /* pra ficar acima do gradiente */
+    z-index: 2;
+    font-style: italic;
+    font-size: 1.4rem;
+    max-width: 40%;
+    text-shadow: 1px 1px 4px rgba(0,0,0,0.7);
+}
+
+
+
+#la-tavola {
+    padding: 60px 20px;
+    text-align: center;
+    background-color: #F5F0E6;
+    color: #333;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+#la-tavola h2 {
+    font-size: 2.2rem;    /* ajusta o tamanho */
+    color: #7E2B2B;       /* tua cor */
+    text-align: center;   /* centralizado (se quiser) */
+    margin: 20px 0;
+    letter-spacing: 2px;  /* dá um respiro entre letras */
+    font-family: "Stardos Stencil", system-ui;
+}
+
+#la-tavola .subtitulo-tavola {
+    font-family: "Stardos Stencil", system-ui;
+    font-style: italic;
+    color: rgb(102, 102, 102);
+    margin-bottom: 40px;
+    font-size: 1.1rem;
+}
+
+.tavola-lista {
+    max-width: 1200px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 40px; /* espaço entre os cards */
+}
+
+.card-tavola {
+    display: flex;
+    flex-direction: row;
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 6px 15px rgba(0, 0, 0, 0.1);
+    background-color: #fff;
+    transition: transform 0.3s ease;
+}
+
+.card-tavola:hover {
+    transform: scale(1.01);
+}
+
+.card-tavola img {
+    width: 40%;
+    height: 300px;
+    object-fit: cover;
+    border-radius: 14px 0 0 14px;
+}
+
+.conteudo-card {
+    width: 60%;
+    padding: 25px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.card-tavola h3 {
+    color: #7E2B2B;
+    margin-bottom: 12px;
+    font-size: 1.4rem;
+}
+
+.card-tavola p {
+    color: #555;
+    font-size: 1rem;
+    line-height: 1.7;
+    margin: 8px 0;
+}
+
+.harmonizacao {
+    margin: 15px 0;
+    padding: 10px 15px;
+    background-color: #7E2B2B;
+    color: #F5F0E6;
+    border-radius: 8px;
+    font-weight: bold;
+    font-size: 0.95rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.descricao-harm {
+    font-style: italic;
+    color: #666;
+    font-size: 0.95rem;
+    margin-top: 10px;
+}
+
+
+
+#comentarios-partigiani {
+  padding: 60px 20px;
+  background-color: #F5F0E6; /* fundo clarinho igual às outras sections */
+  color: #333;               /* texto escuro para contraste */
+  text-align: center;
+}
+
+#comentarios-partigiani h2 {
+  font-size: 2rem;
+  margin-bottom: 40px;
+  font-family: "Stardos Stencil", system-ui;
+  color: #7E2B2B;
+}
+
+.carousel {
+  overflow: visible;
+  max-width: 1200px;
+  margin: 0 auto;
+  position: relative;
+}
+
+.carousel-track {
+  display: flex;
+  gap: 20px;
+}
+
+.card {
+  background: #F5F0E6;          /* fundo clarinho */
+  color: #333;                  
+  border: 2px solid #7E2B2B;    /* borda visível, cor da pizzaria */
+  border-radius: 15px;           /* cantos arredondados */
+  padding: 20px;
+  min-width: 300px;
+  max-width: 300px;
+  flex: 0 0 auto;
+  
+  /* sombra pra efeito 3D */
+  box-shadow: 0 8px 15px rgba(0, 0, 0, 0.2), 
+              0 4px 6px rgba(0, 0, 0, 0.1);
+  
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* efeito hover 3D */
+.card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 15px 25px rgba(0, 0, 0, 0.3), 
+              0 6px 10px rgba(0, 0, 0, 0.15);
+}
+
+.card .comentario {
+  font-style: italic;
+  margin-bottom: 15px;
+}
+
+.card h4 {
+  margin: 0;
+  font-size: 1.1rem;
+  color: #7E2B2B;
+}
+
+.card span {
+  font-size: 0.9rem;
+  color: #666;
+}
+
+
+
+
+
+#nostra-storia {
+  padding: 60px 20px;
+  background-color: #F5F0E6;
+}
+
+.container-storia {
+  display: flex;
+  align-items: flex-start;
+  gap: 40px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.storia-texto {
+  flex: 2;
+}
+
+.storia-texto h2 {
+  font-size: 2.2rem;
+  color: #7E2B2B;
+  margin-bottom: 20px;
+  font-family: "Stardos Stencil", system-ui;
+}
+
+.storia-texto p {
+  line-height: 1.7;
+  margin-bottom: 16px;
+  text-align: justify;
+}
+
+.storia-texto blockquote {
+  font-style: italic;
+  margin: 20px 0;
+  padding-left: 15px;
+  border-left: 3px solid #7E2B2B;
+  color: #444;
+}
+
+.conteudo-extra {
+  display: none;
+  animation: fadeIn 0.5s ease-in-out;
+}
+
+.btn-saiba-mais {
+  background: none;
+  border: 2px solid #7E2B2B;
+  border-radius: 25px;
+  padding: 8px 18px;
+  cursor: pointer;
+  font-size: 16px;
+  color: #7E2B2B;
+  transition: all 0.3s ease;
+}
+
+.btn-saiba-mais:hover {
+  background: #7E2B2B;
+  color: #fff;
+}
+
+.storia-imagem {
+  flex: 1.1;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.storia-imagem img {
+  max-width: 100%;
+  border-radius: 10px;
+}
+
+.imagem-extra {
+  display: none; /* escondida de início */
+  animation: fadeIn 0.5s ease-in-out;
+}
+
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+
+
+
+
+footer {
+  background-color: #222;
+  color: #fff;
+  display: flex;
+  justify-content: space-between;
+  padding: 30px 50px;
+  flex-wrap: wrap; /* para responsividade */
+  font-family: sans-serif;
+}
+
+.footer-left,
+.footer-right {
+  max-width: 45%;
+}
+
+.footer-left p,
+.footer-left address,
+.footer-right p {
+  margin: 5px 0;
+}
+
+.footer-right a {
+  display: inline-block;
+  margin: 0 8px;
+  transition: transform 0.2s, opacity 0.2s;
+}
+
+.footer-right a img {
+  width: 40px;
+  height: 40px;
+}
+
+.footer-right a:hover {
+  transform: scale(1.2);
+  opacity: 0.8;
+}
+
+
+
+/* Responsividade: em telas menores, imagem acima do texto */
+@media (max-width: 768px) {
+    .card-tavola {
+        flex-direction: column;
+    }
+
+    .card-tavola img {
+        width: 100%;
+        height: 220px;
+        border-radius: 14px 14px 0 0;
+    }
+
+    .conteudo-card {
+        width: 100%;
+        padding: 20px;
+    }
+}
