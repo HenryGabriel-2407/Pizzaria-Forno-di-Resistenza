@@ -1,13 +1,14 @@
 # routes/produto.py
+from http import HTTPStatus
+from typing import List
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
-from typing import List
-from http import HTTPStatus
 
 from pizzaria_system.database import get_session
-from pizzaria_system.models import Produto, ComboProduto, CategoriaProduto
-from pizzaria_system.schemas import ProdutoCreate, ProdutoResponse, ProdutoUpdate, MessageResponse
+from pizzaria_system.models import CategoriaProduto, ComboProduto, Produto
+from pizzaria_system.schemas import MessageResponse, ProdutoCreate, ProdutoResponse, ProdutoUpdate
 
 router = APIRouter(prefix='/produtos', tags=['produtos'])
 
@@ -50,7 +51,7 @@ def criar_produto(
     _verificar_categoria_existente(produto_data.id_categoria, session)
 
     # Cria instância do modelo
-    novo_produto = Produto(**produto_data.model_dump())  #Transforma em dict
+    novo_produto = Produto(**produto_data.model_dump())  # Transforma em dict
     session.add(novo_produto)
     session.commit()
     session.refresh(novo_produto)

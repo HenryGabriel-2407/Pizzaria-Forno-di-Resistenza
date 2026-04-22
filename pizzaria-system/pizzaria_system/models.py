@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import Optional, List
+from typing import List, Optional
 
-from sqlalchemy import ForeignKey, func, CheckConstraint, Index, UniqueConstraint, JSON
+from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, registry, relationship
 
 table_registry = registry()
@@ -9,6 +9,7 @@ table_registry = registry()
 # ==================================================================
 # 1. TABELAS DE DOMÍNIO / CATÁLOGO (cardápio, categorias, pagamentos)
 # ==================================================================
+
 
 @table_registry.mapped_as_dataclass(kw_only=True)
 class CategoriaProduto:
@@ -42,6 +43,7 @@ class Produto:
         init=False
     )
 
+
 @table_registry.mapped_as_dataclass(kw_only=True)
 class Combo:
     __tablename__ = 'combo'
@@ -60,12 +62,14 @@ class Combo:
         init=False
     )
 
+
 @table_registry.mapped_as_dataclass(kw_only=True)
 class ComboProduto:
     __tablename__ = 'combo_produto'
     """Tabela associativa entre Combo e Produto (muitos-para-muitos)."""
     combo_id: Mapped[int] = mapped_column(ForeignKey('combo.id'), primary_key=True)
     produto_id: Mapped[int] = mapped_column(ForeignKey('produto.id'), primary_key=True)
+
 
 @table_registry.mapped_as_dataclass(kw_only=True)
 class MetodoPagamento:
@@ -167,6 +171,7 @@ class Funcionario:
 # 4. MESA (física do salão)
 # ==================================================================
 
+
 @table_registry.mapped_as_dataclass(kw_only=True)
 class Mesa:
     __tablename__ = 'mesa'
@@ -185,6 +190,7 @@ class Mesa:
 # ==================================================================
 # 5. COMANDA (pedido principal) e ITENS
 # ==================================================================
+
 
 @table_registry.mapped_as_dataclass(kw_only=True)
 class Comanda:
@@ -319,6 +325,7 @@ class PedidoSync:
 # ==================================================================
 # 9. AUDITORIA (logs de ações críticas)
 # ==================================================================
+
 
 @table_registry.mapped_as_dataclass(kw_only=True)
 class AuditLog:

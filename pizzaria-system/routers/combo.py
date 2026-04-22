@@ -1,12 +1,13 @@
 # routes/combo.py
+from http import HTTPStatus
+from typing import List
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
-from typing import List
-from http import HTTPStatus
 
 from pizzaria_system.database import get_session
-from pizzaria_system.models import Combo, Produto, ComboProduto
+from pizzaria_system.models import Combo, ComboProduto, Produto
 from pizzaria_system.schemas import ComboCreate, ComboResponse, ComboUpdate, MessageResponse
 
 router = APIRouter(prefix='/combos', tags=['combos'])
@@ -21,7 +22,7 @@ def _verificar_produtos_existentes(produtos_ids: List[int], session: Session) ->
     produtos = session.scalars(
         select(Produto).where(Produto.id.in_(produtos_ids))
     ).all()
-    
+
     if len(produtos) != len(produtos_ids):
         ids_encontrados = {p.id for p in produtos}
         ids_nao_encontrados = set(produtos_ids) - ids_encontrados
@@ -53,7 +54,7 @@ def _atualizar_produtos_do_combo(combo_id: int, produtos_ids: List[int], session
         select(ComboProduto).where(ComboProduto.combo_id == combo_id)
     )
     session.query(ComboProduto).filter(ComboProduto.combo_id == combo_id).delete()
-    
+
     # Adiciona novas associações
     for produto_id in produtos_ids:
         combo_produto = ComboProduto(
@@ -77,13 +78,13 @@ def criar_combo(
     """
     # Verifica se todos os produtos existem
     produtos = _verificar_produtos_existentes(combo_data.produtos_ids, session)
-    
+
     # Cria instância do combo (sem os produtos ainda)
     combo_dict = combo_data.model_dump(exclude={'produtos_ids'})
     novo_combo = Combo(**combo_dict)
     session.add(novo_combo)
     session.flush()  # Garante que o combo tenha um ID antes de adicionar associações
-    
+
     # Adiciona associações com produtos
     for produto in produtos:
         combo_produto = ComboProduto(
@@ -91,10 +92,10 @@ def criar_combo(
             produto_id=produto.id
         )
         session.add(combo_produto)
-    
+
     session.commit()
     session.refresh(novo_combo)
-    
+
     # Carrega o combo com os relacionamentos para a resposta
     return novo_combo
 
@@ -109,12 +110,12 @@ def listar_combos(
     Retorna a lista de combos. Permite filtrar por disponibilidade e popularidade.
     """
     query = select(Combo).options(joinedload(Combo.produtos))
-    
+
     if disponivel is not None:
         query = query.where(Combo.disponivel == disponivel)
     if popular is not None:
         query = query.where(Combo.popular == popular)
-    
+
     combos = session.scalars(query).unique().all()
     return combos
 
@@ -135,7 +136,7 @@ def obter_combo(
             status_code=HTTPStatus.NOT_FOUND,
             detail="Combo não encontrado"
         )
-    
+
     return combo
 
 
@@ -151,21 +152,21 @@ def atualizar_combo(
     - Atualização parcial (apenas campos enviados).
     """
     combo = _verificar_combo_existente(combo_id, session)
-    
+
     # Se a lista de produtos está sendo alterada, valida e atualiza
     if dados.produtos_ids is not None:
         produtos = _verificar_produtos_existentes(dados.produtos_ids, session)
         _atualizar_produtos_do_combo(combo_id, dados.produtos_ids, session)
-    
+
     # Aplica apenas os campos que vieram na requisição (excluindo produtos_ids)
     dados_dict = dados.model_dump(exclude_unset=True, exclude={'produtos_ids'})
     for campo, valor in dados_dict.items():
         setattr(combo, campo, valor)
-    
+
     session.add(combo)
     session.commit()
     session.refresh(combo)
-    
+
     return combo
 
 
@@ -179,14 +180,14 @@ def deletar_combo(
     - Remove também as associações na tabela combo_produto (cascade).
     """
     combo = _verificar_combo_existente(combo_id, session)
-    
+
     # Remove associações primeiro (opcional, se não tiver cascade)
     session.query(ComboProduto).filter(ComboProduto.combo_id == combo_id).delete()
-    
+
     # Remove o combo
     session.delete(combo)
     session.commit()
-    
+
     return MessageResponse(
         message=f"Combo '{combo.nome}' removido com sucesso.",
         success=True
@@ -205,13 +206,13 @@ def adicionar_produto_ao_combo(
     """
     combo = _verificar_combo_existente(combo_id, session)
     produto = session.get(Produto, produto_id)
-    
+
     if not produto:
         raise HTTPException(
             status_code=HTTPStatus.NOT_FOUND,
             detail=f"Produto com id {produto_id} não encontrado."
         )
-    
+
     # Verifica se o produto já está no combo
     assoc_existente = session.scalar(
         select(ComboProduto).where(
@@ -219,13 +220,13 @@ def adicionar_produto_ao_combo(
             ComboProduto.produto_id == produto_id
         )
     )
-    
+
     if assoc_existente:
         raise HTTPException(
             status_code=HTTPStatus.BAD_REQUEST,
             detail="Este produto já está associado a este combo."
         )
-    
+
     # Cria nova associação
     combo_produto = ComboProduto(
         combo_id=combo_id,
@@ -233,7 +234,7 @@ def adicionar_produto_ao_combo(
     )
     session.add(combo_produto)
     session.commit()
-    
+
     return MessageResponse(
         message=f"Produto '{produto.nome}' adicionado ao combo '{combo.nome}' com sucesso.",
         success=True
@@ -256,27 +257,27 @@ def remover_produto_do_combo(
     """
     combo = _verificar_combo_existente(combo_id, session)
     produto = session.get(Produto, produto_id)
-    
+
     if not produto:
         raise HTTPException(
             status_code=HTTPStatus.NOT_FOUND,
             detail=f"Produto com id {produto_id} não encontrado."
         )
-    
+
     # Remove a associação
     resultado = session.query(ComboProduto).filter(
         ComboProduto.combo_id == combo_id,
         ComboProduto.produto_id == produto_id
     ).delete()
-    
+
     if resultado == 0:
         raise HTTPException(
             status_code=HTTPStatus.NOT_FOUND,
             detail="Esta associação entre produto e combo não existe."
         )
-    
+
     session.commit()
-    
+
     return MessageResponse(
         message=f"Produto '{produto.nome}' removido do combo '{combo.nome}' com sucesso.",
         success=True

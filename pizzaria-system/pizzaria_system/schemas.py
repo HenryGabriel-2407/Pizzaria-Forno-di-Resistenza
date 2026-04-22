@@ -1,12 +1,12 @@
 from datetime import datetime
-from typing import Optional, List
+from typing import List, Optional
 
-from pydantic import BaseModel, Field, EmailStr, ConfigDict
-
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 # ==================================================================
 # Schemas para CategoriaProduto
 # ==================================================================
+
 
 class CategoriaProdutoBase(BaseModel):
     nome: str = Field(..., max_length=100)
@@ -28,6 +28,7 @@ class CategoriaProdutoUpdate(BaseModel):
 # ==================================================================
 # Schemas para MetodoPagamento (complemento)
 # ==================================================================
+
 
 class MetodoPagamentoCreate(BaseModel):
     nome: str = Field(..., max_length=50)
@@ -74,6 +75,7 @@ class ProdutoResponse(ProdutoBase):
 
     model_config = ConfigDict(from_attributes=True)
 
+
 class ProdutoUpdate(BaseModel):
     nome: Optional[str] = Field(None, max_length=200)
     descricao: Optional[str] = None
@@ -87,6 +89,7 @@ class ProdutoUpdate(BaseModel):
 # ==================================================================
 # Schemas para Combo (com relacionamento com Produto)
 # ==================================================================
+
 
 class ComboBase(BaseModel):
     nome: str = Field(..., max_length=200)
@@ -185,9 +188,33 @@ class ClienteUpdate(BaseModel):
     ativo: Optional[bool] = None
 
 
+class ClienteLogin(BaseModel):
+    email: EmailStr
+    senha: str
+
+
+class ClienteUpdatePassword(BaseModel):
+    senha_atual: str
+    nova_senha: str = Field(..., min_length=6)
+
+
+class ClienteResetPassword(BaseModel):
+    token: str
+    nova_senha: str = Field(..., min_length=6)
+
+
+class ClienteRequestReset(BaseModel):
+    email: EmailStr
+
+
+class ClienteMeResponse(ClienteResponse):
+    """Igual ao ClienteResponse, mas usado para /me"""
+    pass
+
 # ==================================================================
 # Schemas para Funcionario
 # ==================================================================
+
 
 class FuncionarioBase(BaseModel):
     nome: str
@@ -209,9 +236,36 @@ class FuncionarioResponse(FuncionarioBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class FuncionarioUpdate(BaseModel):
+    nome: Optional[str] = None
+    email: Optional[EmailStr] = None
+    telefone: Optional[str] = None
+    cargo: Optional[str] = None  # 'garcom', 'cozinha', 'admin', 'gerente'
+    ativo: Optional[bool] = None
+
+
+class FuncionarioUpdatePassword(BaseModel):
+    senha_atual: str
+    nova_senha: str = Field(..., min_length=6)
+
+
+class FuncionarioLogin(BaseModel):
+    email: EmailStr
+    senha: str
+
+
+class FuncionarioLoginResponse(BaseModel):
+    id: int
+    nome: str
+    email: str
+    cargo: str
+    ativo: bool
+    message: str
+
 # ==================================================================
 # Schemas para Mesa
 # ==================================================================
+
 
 class MesaBase(BaseModel):
     numero: int = Field(..., gt=0)
@@ -228,6 +282,13 @@ class MesaResponse(MesaBase):
     id: int
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class MesaUpdate(BaseModel):
+    numero: Optional[int] = Field(None, gt=0)
+    qtd_lugares: Optional[int] = Field(None, ge=1)
+    status: Optional[str] = Field(None, pattern='^(livre|ocupada|reservada)$')
+    codigo_qr: Optional[str] = None
 
 
 # ==================================================================
@@ -266,9 +327,29 @@ class CodPromocionalResponse(CodPromocionalBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class CodPromocionalUpdate(BaseModel):
+    codigo: Optional[str] = Field(None, max_length=50)
+    desconto_percentual: Optional[float] = Field(None, gt=0, le=100)
+    data_validade: Optional[datetime] = None
+    ativo: Optional[bool] = None
+
+
+class CodPromocionalValidate(BaseModel):
+    codigo: str
+    valor_pedido: float
+
+
+class CodPromocionalValidateResponse(BaseModel):
+    valido: bool
+    desconto_percentual: Optional[float] = None
+    valor_desconto: Optional[float] = None
+    valor_final: Optional[float] = None
+    mensagem: str
+
 # ==================================================================
 # Schemas para PedidoItem (itens da comanda)
 # ==================================================================
+
 
 class PedidoItemBase(BaseModel):
     id_produto: Optional[int] = None
@@ -351,6 +432,52 @@ class ComandaResponse(ComandaBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ComandaUpdate(BaseModel):
+    """Atualização parcial da comanda (exceto itens e status)."""
+    id_metodo_pagamento: Optional[int] = None
+    id_cod_promocional: Optional[int] = None
+    preco_total: Optional[float] = None
+    desconto_aplicado: Optional[float] = None
+    taxa_entrega: Optional[float] = None
+    valor_a_pagar: Optional[float] = None
+    troco: Optional[float] = None
+    tipo_entrega: Optional[str] = None
+    origem: Optional[str] = None
+    observacao_geral: Optional[str] = None
+
+
+class PedidoItemCreateSemComanda(BaseModel):
+    """Usado para adicionar item a uma comanda existente (sem id_comanda)."""
+    id_produto: Optional[int] = None
+    id_combo: Optional[int] = None
+    quantidade: int = Field(1, ge=1)
+    observacao: Optional[str] = None
+
+
+class PedidoItemUpdate(BaseModel):
+    """Atualização de item (quantidade, observacao)."""
+    quantidade: Optional[int] = Field(None, ge=1)
+    observacao: Optional[str] = None
+
+
+class StatusUpdateRequest(BaseModel):
+    """Solicitação de mudança de status da comanda."""
+    status_novo: str  # 'em_preparo', 'pronto', 'entregue', 'cancelado', 'pago'
+    observacao: Optional[str] = None
+
+
+class FiltroComanda(BaseModel):
+    """Filtros para listagem de comandas."""
+    status_comanda: Optional[str] = None
+    status_pagamento: Optional[str] = None
+    tipo_entrega: Optional[str] = None
+    id_cliente: Optional[int] = None
+    id_mesa: Optional[int] = None
+    id_garcom: Optional[int] = None
+    data_inicio: Optional[datetime] = None
+    data_fim: Optional[datetime] = None
+
+
 # ==================================================================
 # Schemas para AuditLog
 # ==================================================================
@@ -371,7 +498,16 @@ class AuditLogResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-
+class AuditLogFilter(BaseModel):
+    usuario_tipo: Optional[str] = None
+    usuario_id: Optional[int] = None
+    funcionario_id: Optional[int] = None
+    acao: Optional[str] = None
+    tabela_afetada: Optional[str] = None
+    registro_id: Optional[int] = None
+    data_inicio: Optional[datetime] = None
+    data_fim: Optional[datetime] = None
+    
 # ==================================================================
 # Schemas auxiliares para listas paginadas ou mensagens
 # ==================================================================
@@ -392,24 +528,30 @@ class LoginRequest(BaseModel):
     email: EmailStr
     senha: str
 
+
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
 
+
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
 
+
 class PasswordResetRequest(BaseModel):
     email: EmailStr
+
 
 class PasswordResetConfirm(BaseModel):
     token: str
     nova_senha: str = Field(..., min_length=6)
 
+
 class PasswordChange(BaseModel):
     senha_atual: str
     nova_senha: str = Field(..., min_length=6)
+
 
 class CarrinhoItem(BaseModel):
     tipo: str  # 'produto' ou 'combo'
@@ -417,8 +559,10 @@ class CarrinhoItem(BaseModel):
     quantidade: int = Field(ge=1)
     observacao: Optional[str] = None
 
+
 class CarrinhoCreate(BaseModel):
     items: List[CarrinhoItem]
+
 
 class CarrinhoResponse(BaseModel):
     items: List[CarrinhoItem]
@@ -427,21 +571,22 @@ class CarrinhoResponse(BaseModel):
     desconto: float
     total: float
 
+
 class PagamentoPixRequest(BaseModel):
     comanda_id: int
     valor: float = Field(gt=0)
+
 
 class PagamentoPixResponse(BaseModel):
     qr_code_text: str
     qr_code_base64: str   # imagem em base64
     expiracao: datetime
 
+
 class PagamentoConfirmacao(BaseModel):
     comanda_id: int
     transacao_id: str
     status: str  # 'aprovado', 'falhou'
-
-
 
 
 # ==================================================================
@@ -452,5 +597,3 @@ ProdutoResponse.model_rebuild()
 ComboResponse.model_rebuild()
 ClienteResponse.model_rebuild()
 ComandaResponse.model_rebuild()
-
-

@@ -1,8 +1,9 @@
+from http import HTTPStatus
+from typing import List
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from typing import List
-from http import HTTPStatus
 
 from pizzaria_system.database import get_session
 from pizzaria_system.models import CategoriaProduto
@@ -10,7 +11,7 @@ from pizzaria_system.schemas import (
     CategoriaProdutoCreate,
     CategoriaProdutoResponse,
     CategoriaProdutoUpdate,
-    MessageResponse
+    MessageResponse,
 )
 
 router = APIRouter(prefix='/categorias', tags=['categorias'])
