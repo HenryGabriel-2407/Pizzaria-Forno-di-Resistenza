@@ -260,7 +260,7 @@ class PedidoItem:
 
     __table_args__ = (
         CheckConstraint(
-            '(id_produto IS NOT NULL) XOR (id_combo IS NOT NULL)',
+            "(id_produto IS NOT NULL) <> (id_combo IS NOT NULL)",
             name='check_produto_ou_combo'
         ),
     )
