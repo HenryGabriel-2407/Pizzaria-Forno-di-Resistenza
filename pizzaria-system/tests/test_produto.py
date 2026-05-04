@@ -1,11 +1,10 @@
-import pytest
 from http import HTTPStatus
 
+import pytest
 from sqlalchemy.orm import Session
-from pizzaria_system.database import engine
 
-from pizzaria_system.models import Cliente, Funcionario, Produto, Combo, ComboProduto
-from pizzaria_system.security import get_password_hash
+from pizzaria_system.database import engine
+from pizzaria_system.models import Combo, ComboProduto, Produto
 
 
 @pytest.fixture
@@ -17,9 +16,11 @@ def admin_token(client, admin_user):
     assert response.status_code == HTTPStatus.OK
     return response.json()["access_token"]
 
+
 @pytest.fixture
 def admin_headers(admin_token):
     return {"Authorization": f"Bearer {admin_token}"}
+
 
 @pytest.fixture
 def cliente_token(client, cliente_comum):
@@ -30,6 +31,7 @@ def cliente_token(client, cliente_comum):
     assert response.status_code == HTTPStatus.OK
     return response.json()["access_token"]
 
+
 # ------------------------------------------------------------
 # Testes (mantenha todos os testes como estavam, exceto remova a segunda definição de cliente_comum)
 # ------------------------------------------------------------
@@ -37,6 +39,7 @@ def test_listar_produtos_vazio(client):
     response = client.get("/produtos/")
     assert response.status_code == HTTPStatus.OK
     assert response.json() == []
+
 
 def test_listar_produtos_com_filtros(client, db_session, sample_categoria):
     p1 = Produto(
@@ -74,6 +77,7 @@ def test_listar_produtos_com_filtros(client, db_session, sample_categoria):
     resp = client.get("/produtos/?categoria_id=999")
     assert resp.json() == []
 
+
 def test_obter_produto_existente(client, sample_produto):
     response = client.get(f"/produtos/{sample_produto.id}")
     assert response.status_code == HTTPStatus.OK
@@ -81,10 +85,12 @@ def test_obter_produto_existente(client, sample_produto):
     assert data["id"] == sample_produto.id
     assert data["nome"] == sample_produto.nome
 
+
 def test_obter_produto_inexistente(client):
     response = client.get("/produtos/9999")
     assert response.status_code == HTTPStatus.NOT_FOUND
     assert "Produto não encontrado" in response.json()["detail"]
+
 
 def test_criar_produto_sem_autenticacao(client, sample_categoria):
     payload = {
@@ -99,6 +105,7 @@ def test_criar_produto_sem_autenticacao(client, sample_categoria):
     }
     response = client.post("/produtos/", json=payload)
     assert response.status_code == HTTPStatus.UNAUTHORIZED
+
 
 def test_criar_produto_com_admin(client, admin_headers, sample_categoria):
     payload = {
@@ -119,6 +126,7 @@ def test_criar_produto_com_admin(client, admin_headers, sample_categoria):
     assert data["id_categoria"] == sample_categoria.id
     assert "id" in data
 
+
 def test_criar_produto_categoria_inexistente(client, admin_headers):
     payload = {
         "nome": "Quatro Queijos",
@@ -132,6 +140,7 @@ def test_criar_produto_categoria_inexistente(client, admin_headers):
     assert response.status_code == HTTPStatus.BAD_REQUEST
     assert "Categoria com id 9999 não encontrada" in response.json()["detail"]
 
+
 def test_criar_produto_sem_imagem_link(client, admin_headers, sample_categoria):
     payload = {
         "nome": "Sem Imagem",
@@ -144,10 +153,12 @@ def test_criar_produto_sem_imagem_link(client, admin_headers, sample_categoria):
     # imagem_link é obrigatório, então deve falhar com 422
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
 
+
 def test_atualizar_produto_sem_autenticacao(client, sample_produto):
     payload = {"nome": "Margherita Especial"}
     response = client.put(f"/produtos/{sample_produto.id}", json=payload)
     assert response.status_code == HTTPStatus.UNAUTHORIZED
+
 
 def test_atualizar_produto_com_admin(client, admin_headers, sample_produto):
     payload = {"nome": "Margherita Especial", "preco": 55.90}
@@ -158,19 +169,23 @@ def test_atualizar_produto_com_admin(client, admin_headers, sample_produto):
     assert data["preco"] == 55.90
     assert data["descricao"] == sample_produto.descricao
 
+
 def test_atualizar_produto_categoria_inexistente(client, admin_headers, sample_produto):
     payload = {"id_categoria": 8888}
     response = client.put(f"/produtos/{sample_produto.id}", json=payload, headers=admin_headers)
     assert response.status_code == HTTPStatus.BAD_REQUEST
     assert "Categoria com id 8888 não encontrada" in response.json()["detail"]
 
+
 def test_atualizar_produto_inexistente(client, admin_headers):
     response = client.put("/produtos/99999", json={"nome": "Nada"}, headers=admin_headers)
     assert response.status_code == HTTPStatus.NOT_FOUND
 
+
 def test_deletar_produto_sem_autenticacao(client, sample_produto):
     response = client.delete(f"/produtos/{sample_produto.id}")
     assert response.status_code == HTTPStatus.UNAUTHORIZED
+
 
 def test_deletar_produto_sem_combo(client, admin_headers, sample_produto):
     produto_id = sample_produto.id
@@ -182,6 +197,7 @@ def test_deletar_produto_sem_combo(client, admin_headers, sample_produto):
     with Session(engine) as session:
         produto = session.get(Produto, produto_id)
         assert produto is None
+
 
 def test_deletar_produto_com_combo(client, admin_headers, sample_produto, db_session):
     combo = Combo(
@@ -202,6 +218,7 @@ def test_deletar_produto_com_combo(client, admin_headers, sample_produto, db_ses
     detail = response.json()["detail"]
     assert "produto está vinculado a um ou mais combos" in detail
     assert "Remova-o dos combos antes de excluí-lo" in detail
+
 
 def test_criar_produto_com_cliente_nao_admin(client, cliente_token, sample_categoria):
     payload = {

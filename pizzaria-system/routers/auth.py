@@ -1,6 +1,5 @@
 # routers/auth.py
 from http import HTTPStatus
-from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import OAuth2PasswordRequestForm
@@ -53,7 +52,7 @@ def login(
 
     # 5. Preparar payload do token
     token_data = {"sub": user.email}
-    
+
     # Opcional: adicionar claim de tipo (útil para permissões futuras)
     if is_funcionario:
         token_data["tipo"] = "funcionario"

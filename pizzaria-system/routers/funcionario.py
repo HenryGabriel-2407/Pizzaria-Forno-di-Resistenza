@@ -1,5 +1,4 @@
 # routes/funcionarios.py
-from datetime import datetime
 from http import HTTPStatus
 from typing import List, Union
 
@@ -8,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from pizzaria_system.database import get_session
-from pizzaria_system.models import Comanda, Funcionario, Cliente
+from pizzaria_system.models import Cliente, Comanda, Funcionario
 from pizzaria_system.schemas import (
     FuncionarioCreate,
     FuncionarioResponse,

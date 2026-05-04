@@ -183,6 +183,7 @@ class ClienteResponse(ClienteBase):
 
 class ClienteUpdate(BaseModel):
     nome: Optional[str] = None
+    email: Optional[EmailStr] = None 
     telefone: Optional[str] = None
     documento: Optional[str] = None
     ativo: Optional[bool] = None
@@ -498,6 +499,7 @@ class AuditLogResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+
 class AuditLogFilter(BaseModel):
     usuario_tipo: Optional[str] = None
     usuario_id: Optional[int] = None
@@ -507,10 +509,12 @@ class AuditLogFilter(BaseModel):
     registro_id: Optional[int] = None
     data_inicio: Optional[datetime] = None
     data_fim: Optional[datetime] = None
-    
+
+
 # ==================================================================
 # Schemas auxiliares para listas paginadas ou mensagens
 # ==================================================================
+
 
 class ListResponse(BaseModel):
     items: List

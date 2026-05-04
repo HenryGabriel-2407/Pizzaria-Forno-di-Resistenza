@@ -1,13 +1,14 @@
 # routes/clientes.py
 from http import HTTPStatus
-from typing import List, Union
+from typing import List, Optional, Union
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from pizzaria_system.audit import log_audit
 from pizzaria_system.database import get_session
-from pizzaria_system.models import Cliente, Funcionario, EnderecoCliente
+from pizzaria_system.models import Cliente, EnderecoCliente, Funcionario
 from pizzaria_system.schemas import (
     ClienteCreate,
     ClienteResponse,
@@ -21,9 +22,8 @@ from pizzaria_system.security import get_current_user, get_password_hash, verify
 
 router = APIRouter(prefix='/clientes', tags=['clientes'])
 
-T_Session = Depends(get_session)
 
-# ---------- UTILITÁRIOS ----------
+# ========== UTILITÁRIOS ==========
 def _obter_cliente_por_id(cliente_id: int, session: Session) -> Cliente:
     cliente = session.get(Cliente, cliente_id)
     if not cliente:
@@ -34,7 +34,7 @@ def _obter_cliente_por_id(cliente_id: int, session: Session) -> Cliente:
     return cliente
 
 
-def _verificar_email_existente(email: str, session: Session, exclude_id: int = None) -> None:
+def _verificar_email_existente(email: str, session: Session, exclude_id: Optional[int] = None) -> None:
     query = select(Cliente).where(Cliente.email == email)
     if exclude_id:
         query = query.where(Cliente.id != exclude_id)
@@ -45,7 +45,7 @@ def _verificar_email_existente(email: str, session: Session, exclude_id: int = N
         )
 
 
-def _verificar_documento_existente(documento: str, session: Session, exclude_id: int = None) -> None:
+def _verificar_documento_existente(documento: Optional[str], session: Session, exclude_id: Optional[int] = None) -> None:
     if not documento:
         return
     query = select(Cliente).where(Cliente.documento == documento)
@@ -63,10 +63,23 @@ def _is_admin(current_user: Union[Cliente, Funcionario]) -> bool:
     return isinstance(current_user, Funcionario) and current_user.cargo == 'admin'
 
 
-# ---------- CRUD CLIENTE (público/autenticado) ----------
+def _get_cliente_with_enderecos(cliente_id: int, session: Session) -> Cliente:
+    """Retorna cliente com endereços carregados via selectinload."""
+    cliente = session.scalar(
+        select(Cliente)
+        .where(Cliente.id == cliente_id)
+        .options(selectinload(Cliente.enderecos))
+    )
+    if not cliente:
+        raise HTTPException(HTTPStatus.NOT_FOUND, "Cliente não encontrado.")
+    return cliente
+
+
+# ========== ENDPOINTS DE CLIENTE ==========
 @router.post('/', response_model=ClienteResponse, status_code=HTTPStatus.CREATED)
 def criar_cliente(
     cliente_data: ClienteCreate,
+    request: Request,
     session: Session = Depends(get_session)
 ):
     """
@@ -91,26 +104,37 @@ def criar_cliente(
             session.add(endereco)
 
     session.commit()
-    session.refresh(novo_cliente)
 
-    return session.scalar(
-        select(Cliente)
-        .where(Cliente.id == novo_cliente.id)
-        .options(selectinload(Cliente.enderecos))
-    )
+    if request:
+        log_audit(
+            session=session,
+            current_user=None,
+            acao='cliente_create',
+            tabela_afetada='cliente',
+            registro_id=novo_cliente.id,
+            dados_novos={'email': novo_cliente.email, 'nome': novo_cliente.nome},
+            request=request
+        )
+        session.commit()
+
+    # Retorna cliente com endereços carregados
+    return _get_cliente_with_enderecos(novo_cliente.id, session)
 
 
 @router.get('/', response_model=List[ClienteResponse])
 def listar_clientes(
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
-    ativo: bool = None,
-    limite: int = 100,
-    offset: int = 0
+    ativo: Optional[bool] = None,
+    search: Optional[str] = Query(None, description="Busca por nome ou e-mail (parcial, case-insensitive)"),
+    order_by: str = Query("id", pattern="^(id|nome|email|data_cadastro)$"),
+    order: str = Query("asc", pattern="^(asc|desc)$"),
+    limite: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0)
 ):
     """
-    Lista clientes com paginação e filtro por 'ativo'.
-    - Apenas funcionários (admin) podem listar clientes.
+    Lista clientes com paginação, filtros e ordenação.
+    - Apenas administradores podem acessar.
     """
     if not _is_admin(current_user):
         raise HTTPException(
@@ -119,8 +143,20 @@ def listar_clientes(
         )
 
     query = select(Cliente).options(selectinload(Cliente.enderecos))
+
     if ativo is not None:
         query = query.where(Cliente.ativo == ativo)
+    if search:
+        query = query.where(
+            Cliente.nome.ilike(f"%{search}%") | Cliente.email.ilike(f"%{search}%")
+        )
+
+    # Ordenação segura
+    coluna = getattr(Cliente, order_by)
+    if order == "desc":
+        coluna = coluna.desc()
+    query = query.order_by(coluna)
+
     query = query.offset(offset).limit(limite)
     clientes = session.scalars(query).unique().all()
     return clientes
@@ -140,13 +176,7 @@ def obter_meu_perfil(
             status_code=HTTPStatus.NOT_FOUND,
             detail="Usuário autenticado não é um cliente."
         )
-    # Recarrega com endereços
-    cliente = session.scalar(
-        select(Cliente)
-        .where(Cliente.id == current_user.id)
-        .options(selectinload(Cliente.enderecos))
-    )
-    return cliente
+    return _get_cliente_with_enderecos(current_user.id, session)
 
 
 @router.get('/{cliente_id}', response_model=ClienteResponse)
@@ -157,35 +187,28 @@ def obter_cliente_por_id(
 ):
     """
     Retorna um cliente específico pelo ID.
-    - Apenas o próprio cliente ou um funcionário admin pode acessar.
+    - Permissão: administrador ou o próprio cliente.
     """
-    # Permissão: admin ou o próprio cliente
     if not (_is_admin(current_user) or (isinstance(current_user, Cliente) and current_user.id == cliente_id)):
         raise HTTPException(
             status_code=HTTPStatus.FORBIDDEN,
             detail="Você não tem permissão para acessar este perfil."
         )
-
-    cliente = session.scalar(
-        select(Cliente)
-        .where(Cliente.id == cliente_id)
-        .options(selectinload(Cliente.enderecos))
-    )
-    if not cliente:
-        raise HTTPException(HTTPStatus.NOT_FOUND, "Cliente não encontrado.")
-    return cliente
+    return _get_cliente_with_enderecos(cliente_id, session)
 
 
 @router.put('/{cliente_id}', response_model=ClienteResponse)
 def atualizar_cliente(
     cliente_id: int,
     dados: ClienteUpdate,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
     """
     Atualiza dados básicos do cliente (nome, telefone, documento, ativo).
-    - Apenas o próprio cliente ou admin pode modificar.
+    - Permissão: administrador ou o próprio cliente.
+    - Atualização parcial (apenas campos enviados).
     """
     if not (_is_admin(current_user) or (isinstance(current_user, Cliente) and current_user.id == cliente_id)):
         raise HTTPException(
@@ -194,6 +217,7 @@ def atualizar_cliente(
         )
 
     cliente = _obter_cliente_por_id(cliente_id, session)
+    dados_anteriores = {'email': cliente.email, 'documento': cliente.documento, 'ativo': cliente.ativo}
 
     if dados.email is not None:
         _verificar_email_existente(dados.email, session, cliente_id)
@@ -205,18 +229,28 @@ def atualizar_cliente(
 
     session.add(cliente)
     session.commit()
-    session.refresh(cliente)
 
-    return session.scalar(
-        select(Cliente)
-        .where(Cliente.id == cliente.id)
-        .options(selectinload(Cliente.enderecos))
-    )
+    # Auditoria
+    if request and _is_admin(current_user):
+        log_audit(
+            session=session,
+            current_user=current_user,
+            acao='cliente_update',
+            tabela_afetada='cliente',
+            registro_id=cliente.id,
+            dados_anteriores=dados_anteriores,
+            dados_novos={'email': cliente.email, 'documento': cliente.documento, 'ativo': cliente.ativo},
+            request=request
+        )
+        session.commit()
+
+    return _get_cliente_with_enderecos(cliente.id, session)
 
 
 @router.delete('/{cliente_id}', response_model=MessageResponse)
 def deletar_cliente(
     cliente_id: int,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
@@ -240,17 +274,31 @@ def deletar_cliente(
 
     session.delete(cliente)
     session.commit()
+
+    if request:
+        log_audit(
+            session=session,
+            current_user=current_user,
+            acao='cliente_delete',
+            tabela_afetada='cliente',
+            registro_id=cliente_id,
+            dados_anteriores={'nome': cliente.nome, 'email': cliente.email},
+            request=request
+        )
+        session.commit()
+
     return MessageResponse(
         message=f"Cliente '{cliente.nome}' removido permanentemente.",
         success=True
     )
 
 
-# ---------- ENDPOINTS DE ENDEREÇO (protegidos) ----------
+# ========== ENDPOINTS DE ENDEREÇO ==========
 @router.post('/{cliente_id}/enderecos', response_model=EnderecoClienteResponse, status_code=HTTPStatus.CREATED)
 def adicionar_endereco(
     cliente_id: int,
     endereco_data: EnderecoClienteCreate,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
@@ -258,7 +306,7 @@ def adicionar_endereco(
     if not (_is_admin(current_user) or (isinstance(current_user, Cliente) and current_user.id == cliente_id)):
         raise HTTPException(HTTPStatus.FORBIDDEN, "Você não pode adicionar endereço a este perfil.")
 
-    cliente = _obter_cliente_por_id(cliente_id, session)
+    _obter_cliente_por_id(cliente_id, session)
 
     if endereco_data.padrao:
         session.query(EnderecoCliente).filter(
@@ -270,6 +318,19 @@ def adicionar_endereco(
     session.add(novo_endereco)
     session.commit()
     session.refresh(novo_endereco)
+
+    if request:
+        log_audit(
+            session=session,
+            current_user=current_user,
+            acao='endereco_create',
+            tabela_afetada='endereco_cliente',
+            registro_id=novo_endereco.id,
+            dados_novos={'apelido': novo_endereco.apelido, 'rua': novo_endereco.rua},
+            request=request
+        )
+        session.commit()
+
     return novo_endereco
 
 
@@ -277,6 +338,7 @@ def adicionar_endereco(
 def atualizar_endereco(
     endereco_id: int,
     dados: EnderecoClienteCreate,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
@@ -301,12 +363,26 @@ def atualizar_endereco(
     session.add(endereco)
     session.commit()
     session.refresh(endereco)
+
+    if request:
+        log_audit(
+            session=session,
+            current_user=current_user,
+            acao='endereco_update',
+            tabela_afetada='endereco_cliente',
+            registro_id=endereco.id,
+            dados_novos={'apelido': endereco.apelido, 'padrao': endereco.padrao},
+            request=request
+        )
+        session.commit()
+
     return endereco
 
 
 @router.delete('/enderecos/{endereco_id}', response_model=MessageResponse)
 def deletar_endereco(
     endereco_id: int,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
@@ -331,14 +407,28 @@ def deletar_endereco(
 
     session.delete(endereco)
     session.commit()
+
+    if request:
+        log_audit(
+            session=session,
+            current_user=current_user,
+            acao='endereco_delete',
+            tabela_afetada='endereco_cliente',
+            registro_id=endereco_id,
+            dados_anteriores={'apelido': endereco.apelido},
+            request=request
+        )
+        session.commit()
+
     return MessageResponse(message="Endereço removido com sucesso.", success=True)
 
 
-# ---------- ENDPOINTS DE SEGURANÇA (senha) ----------
+# ========== ENDPOINTS DE SEGURANÇA ==========
 @router.post('/{cliente_id}/alterar-senha', response_model=MessageResponse)
 def alterar_senha(
     cliente_id: int,
     dados: ClienteUpdatePassword,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
@@ -353,12 +443,25 @@ def alterar_senha(
     cliente.senha_hash = get_password_hash(dados.nova_senha)
     session.add(cliente)
     session.commit()
+
+    if request:
+        log_audit(
+            session=session,
+            current_user=current_user,
+            acao='cliente_change_password',
+            tabela_afetada='cliente',
+            registro_id=cliente.id,
+            request=request
+        )
+        session.commit()
+
     return MessageResponse(message="Senha alterada com sucesso.", success=True)
 
 
 @router.post('/{cliente_id}/ativar', response_model=ClienteResponse)
 def ativar_cliente(
     cliente_id: int,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
@@ -370,6 +473,19 @@ def ativar_cliente(
     cliente.ativo = True
     session.add(cliente)
     session.commit()
+
+    if request:
+        log_audit(
+            session=session,
+            current_user=current_user,
+            acao='cliente_activate',
+            tabela_afetada='cliente',
+            registro_id=cliente.id,
+            dados_novos={'ativo': True},
+            request=request
+        )
+        session.commit()
+
     session.refresh(cliente)
     return cliente
 
@@ -377,10 +493,11 @@ def ativar_cliente(
 @router.post('/{cliente_id}/desativar', response_model=ClienteResponse)
 def desativar_cliente(
     cliente_id: int,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
-    """Desativa um cliente (não pode fazer novos pedidos). Apenas admin ou o próprio cliente."""
+    """Desativa um cliente (não pode fazer novos pedidos). Permissão: admin ou o próprio cliente."""
     if not (_is_admin(current_user) or (isinstance(current_user, Cliente) and current_user.id == cliente_id)):
         raise HTTPException(HTTPStatus.FORBIDDEN, "Apenas administradores ou o próprio cliente podem desativar a conta.")
 
@@ -388,5 +505,18 @@ def desativar_cliente(
     cliente.ativo = False
     session.add(cliente)
     session.commit()
+
+    if request:
+        log_audit(
+            session=session,
+            current_user=current_user,
+            acao='cliente_deactivate',
+            tabela_afetada='cliente',
+            registro_id=cliente.id,
+            dados_novos={'ativo': False},
+            request=request
+        )
+        session.commit()
+
     session.refresh(cliente)
     return cliente

@@ -29,9 +29,7 @@ class Produto:
     imagem_link: Mapped[str] = mapped_column(nullable=False)
     preco: Mapped[float] = mapped_column(nullable=False)
     id_categoria: Mapped[int] = mapped_column(ForeignKey('categoria_produto.id'), nullable=False)
-    tempo_preparo_medio: Mapped[Optional[int]] = mapped_column(nullable=True)  # ← Movido para cima
-
-    # ===== ATRIBUTOS COM VALOR PADRÃO (ficam por último) =====
+    tempo_preparo_medio: Mapped[Optional[int]] = mapped_column(nullable=True)
     popular: Mapped[bool] = mapped_column(default=False)
     disponivel: Mapped[bool] = mapped_column(default=True)
 
@@ -52,7 +50,7 @@ class Combo:
     nome: Mapped[str] = mapped_column(nullable=False)
     imagem_link: Mapped[str] = mapped_column(nullable=False)
     preco: Mapped[float] = mapped_column(nullable=False)
-    tempo_preparo_medio: Mapped[Optional[int]] = mapped_column(nullable=True)  # ← Mover para cima
+    tempo_preparo_medio: Mapped[Optional[int]] = mapped_column(nullable=True)
     popular: Mapped[bool] = mapped_column(default=False)
     disponivel: Mapped[bool] = mapped_column(default=True)
 
@@ -71,6 +69,9 @@ class ComboProduto:
     produto_id: Mapped[int] = mapped_column(ForeignKey('produto.id'), primary_key=True)
 
 
+# ==================================================================
+# 2. Método de Pagamento
+# ==================================================================
 @table_registry.mapped_as_dataclass(kw_only=True)
 class MetodoPagamento:
     __tablename__ = 'metodo_pagamento'
@@ -81,7 +82,7 @@ class MetodoPagamento:
 
 
 # ==================================================================
-# 2. CLIENTE (usuário do sistema web/mobile) e ENDEREÇOS
+# 3. CLIENTE (usuário do sistema web) e ENDEREÇOS
 # ==================================================================
 
 @table_registry.mapped_as_dataclass(kw_only=True)
@@ -94,8 +95,8 @@ class Cliente:
     telefone: Mapped[Optional[str]] = mapped_column(nullable=True)
     documento: Mapped[Optional[str]] = mapped_column(unique=True, nullable=True)
     senha_hash: Mapped[str] = mapped_column(nullable=False)
-    data_cadastro: Mapped[datetime] = mapped_column(server_default=func.now())
-    ultimo_login: Mapped[Optional[datetime]] = mapped_column(nullable=True)
+    data_cadastro: Mapped[Optional[datetime]] = mapped_column(server_default=func.now(), nullable=True, init=False)
+    ultimo_login: Mapped[Optional[datetime]] = mapped_column(nullable=True, init=False)
     ativo: Mapped[bool] = mapped_column(default=True)
 
     # Relacionamentos
@@ -139,23 +140,20 @@ class EnderecoCliente:
 
 
 # ==================================================================
-# 3. FUNCIONÁRIOS (garçons, cozinha, admin) e SESSÕES
+# 4. FUNCIONÁRIOS (garçons, cozinha, admin) e SESSÕES
 # ==================================================================
 
 @table_registry.mapped_as_dataclass(kw_only=True)
 class Funcionario:
     __tablename__ = 'funcionario'
 
-    # ===== ATRIBUTOS OBRIGATÓRIOS (sem valor padrão) =====
     id: Mapped[int] = mapped_column(init=False, primary_key=True)
     nome: Mapped[str] = mapped_column(nullable=False)
     email: Mapped[str] = mapped_column(unique=True, nullable=False)
     senha_hash: Mapped[str] = mapped_column(nullable=False)
-    cargo: Mapped[str]                     # obrigatório
-    data_contratacao: Mapped[datetime] = mapped_column(server_default=func.now())   # ← movido para cá
-    ultimo_login: Mapped[Optional[datetime]] = mapped_column(nullable=True)          # ← movido para cá
-
-    # ===== ATRIBUTOS COM VALOR PADRÃO (ficam por último) =====
+    cargo: Mapped[str] = mapped_column(nullable=False)
+    data_contratacao: Mapped[datetime] = mapped_column(server_default=func.now(), init=False)
+    ultimo_login: Mapped[Optional[datetime]] = mapped_column(nullable=True, init=False)
     telefone: Mapped[Optional[str]] = mapped_column(nullable=True)
     ativo: Mapped[bool] = mapped_column(default=True)
 
@@ -168,7 +166,7 @@ class Funcionario:
     )
 
 # ==================================================================
-# 4. MESA (física do salão)
+# 5. MESA (física do salão)
 # ==================================================================
 
 
@@ -176,19 +174,19 @@ class Funcionario:
 class Mesa:
     __tablename__ = 'mesa'
 
-    # ===== ATRIBUTOS OBRIGATÓRIOS (sem valor padrão) =====
     id: Mapped[int] = mapped_column(init=False, primary_key=True)
     numero: Mapped[int] = mapped_column(unique=True, nullable=False)
-    codigo_qr: Mapped[Optional[str]] = mapped_column(unique=True, nullable=True)  # obrigatório no __init__ (pode ser None)
-
-    # ===== ATRIBUTOS COM VALOR PADRÃO (ficam por último) =====
+    codigo_qr: Mapped[Optional[str]] = mapped_column(
+        unique=True, nullable=True
+    )
     qtd_lugares: Mapped[int] = mapped_column(nullable=False, default=4)
     status: Mapped[str] = mapped_column(default='livre')
 
+    # Relacionamentos
     comandas: Mapped[List['Comanda']] = relationship(back_populates='mesa_rel', init=False)
 
 # ==================================================================
-# 5. COMANDA (pedido principal) e ITENS
+# 6. COMANDA (pedido principal) e ITENS
 # ==================================================================
 
 
@@ -197,8 +195,6 @@ class Comanda:
     __tablename__ = 'comanda'
 
     id: Mapped[int] = mapped_column(init=False, primary_key=True)
-
-    # ===== CAMPOS OBRIGATÓRIOS (sem valor padrão) =====
     id_cliente: Mapped[Optional[int]] = mapped_column(ForeignKey('cliente.id'), nullable=True)
     id_mesa: Mapped[Optional[int]] = mapped_column(ForeignKey('mesa.id'), nullable=True)
     id_garcom: Mapped[Optional[int]] = mapped_column(ForeignKey('funcionario.id'), nullable=True)
@@ -213,7 +209,6 @@ class Comanda:
     data_finalizacao: Mapped[Optional[datetime]] = mapped_column(nullable=True)
     observacao_geral: Mapped[Optional[str]] = mapped_column(nullable=True)
 
-    # ===== CAMPOS COM VALOR PADRÃO (ficam por último) =====
     preco_total: Mapped[float] = mapped_column(nullable=False, default=0.0)
     desconto_aplicado: Mapped[float] = mapped_column(default=0.0)
     taxa_entrega: Mapped[float] = mapped_column(default=0.0)
@@ -249,8 +244,6 @@ class PedidoItem:
     id_comanda: Mapped[int] = mapped_column(ForeignKey('comanda.id'), nullable=False)
     preco_unitario: Mapped[float] = mapped_column(nullable=False)
     subtotal: Mapped[float] = mapped_column(nullable=False)
-
-    # Opcionais (podem ser None)
     id_produto: Mapped[Optional[int]] = mapped_column(ForeignKey('produto.id'), nullable=True)
     id_combo: Mapped[Optional[int]] = mapped_column(ForeignKey('combo.id'), nullable=True)
     observacao: Mapped[Optional[str]] = mapped_column(nullable=True)
@@ -267,7 +260,7 @@ class PedidoItem:
 
 
 # ==================================================================
-# 6. HISTÓRICO DE STATUS DA COMANDA (rastreamento)
+# 7. HISTÓRICO DE STATUS DA COMANDA (rastreamento)
 # ==================================================================
 
 @table_registry.mapped_as_dataclass(kw_only=True)
@@ -287,7 +280,7 @@ class StatusComandaLog:
 
 
 # ==================================================================
-# 7. CÓDIGO PROMOCIONAL
+# 8. CÓDIGO PROMOCIONAL
 # ==================================================================
 
 @table_registry.mapped_as_dataclass(kw_only=True)
@@ -302,30 +295,8 @@ class CodPromocional:
 
 
 # ==================================================================
-# 8. SINCronização OFFLINE (para o app Garçom Digital)
-# ==================================================================
-
-"""
-@table_registry.mapped_as_dataclass
-class PedidoSync:
-    __tablename__ = 'pedido_sync'
-    #Registra pedidos criados offline e controla sincronização com o backend.
-    id: Mapped[int] = mapped_column(init=False, primary_key=True)
-    id_comanda: Mapped[int] = mapped_column(ForeignKey('comanda.id'), nullable=False)
-    dispositivo_id: Mapped[str] = mapped_column(nullable=False)   # ID único do dispositivo mobile
-    status_sync: Mapped[str] = mapped_column(default='pendente')  # pendente, sincronizado, falha
-    tentativas: Mapped[int] = mapped_column(default=0)
-    ultima_tentativa: Mapped[Optional[datetime]] = mapped_column(nullable=True)
-    dados_offline: Mapped[Optional[dict]] = mapped_column(nullable=True)  # JSON com o pedido original
-    criado_em: Mapped[datetime] = mapped_column(server_default=func.now())
-
-    comanda_rel: Mapped['Comanda'] = relationship(back_populates='sync_registros', init=False)
-"""
-
-# ==================================================================
 # 9. AUDITORIA (logs de ações críticas)
 # ==================================================================
-
 
 @table_registry.mapped_as_dataclass(kw_only=True)
 class AuditLog:
@@ -342,6 +313,15 @@ class AuditLog:
     dados_novos: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     ip: Mapped[Optional[str]] = mapped_column(nullable=True)
     user_agent: Mapped[Optional[str]] = mapped_column(nullable=True)
-    timestamp: Mapped[datetime] = mapped_column(server_default=func.now())
+    timestamp: Mapped[datetime] = mapped_column(server_default=func.now(), init=False)
 
     funcionario_rel: Mapped[Optional['Funcionario']] = relationship(back_populates='logs_auditoria', init=False)
+
+    __table_args__ = (
+        Index('idx_audit_timestamp', 'timestamp'),
+        Index('idx_audit_acao', 'acao'),
+        Index('idx_audit_tabela', 'tabela_afetada'),
+        Index('idx_audit_usuario', 'usuario_tipo', 'usuario_id'),
+        Index('idx_audit_funcionario', 'funcionario_id'),
+        Index('idx_audit_registro', 'tabela_afetada', 'registro_id'),
+    )

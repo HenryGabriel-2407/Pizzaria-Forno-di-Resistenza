@@ -155,7 +155,7 @@ def atualizar_combo(
 
     # Se a lista de produtos está sendo alterada, valida e atualiza
     if dados.produtos_ids is not None:
-        produtos = _verificar_produtos_existentes(dados.produtos_ids, session)
+        _verificar_produtos_existentes(dados.produtos_ids, session)
         _atualizar_produtos_do_combo(combo_id, dados.produtos_ids, session)
 
     # Aplica apenas os campos que vieram na requisição (excluindo produtos_ids)

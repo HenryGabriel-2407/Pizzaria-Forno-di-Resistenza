@@ -1,56 +1,23 @@
-import pytest
-import tempfile
 import os
+import tempfile
+
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from pizzaria_system.app import app 
+from pizzaria_system.app import app
 from pizzaria_system.database import get_session
-from pizzaria_system.models import table_registry, CategoriaProduto, Produto, Funcionario, Cliente
+from pizzaria_system.models import CategoriaProduto, Cliente, Funcionario, Produto, table_registry
 from pizzaria_system.security import get_password_hash
-from datetime import datetime
 
-# Cria um arquivo de banco de dados temporário
-@pytest.fixture(scope="session")
-def temp_db():
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    yield path
-    os.unlink(path)
-
-@pytest.fixture(scope="session")
-def engine(temp_db):
-    db_url = f"sqlite:///{temp_db}"
-    engine = create_engine(db_url, connect_args={"check_same_thread": False})
-    # Cria as tabelas uma única vez
-    table_registry.metadata.create_all(bind=engine)
-    yield engine
-    table_registry.metadata.drop_all(bind=engine)
-    engine.dispose()
-
-@pytest.fixture(scope="session")
-def TestingSessionLocal(engine):
-    return sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-def override_get_session(TestingSessionLocal):
-    def _override():
-        db = TestingSessionLocal()
-        try:
-            yield db
-        finally:
-            db.close()
-    return _override
-
-# ============================================
-# Configuração global (executada uma vez no carregamento do conftest)
-# ============================================
+# Configuração do banco de teste
 _temp_db_fd, _temp_db_path = tempfile.mkstemp(suffix=".db")
 os.close(_temp_db_fd)
-
 SQLALCHEMY_DATABASE_URL = f"sqlite:///{_temp_db_path}"
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
 
 def override_get_session():
     db = TestingSessionLocal()
@@ -59,34 +26,100 @@ def override_get_session():
     finally:
         db.close()
 
+
 app.dependency_overrides[get_session] = override_get_session
 
-# Cria as tabelas imediatamente (fora das fixtures)
+# Cria as tabelas
 table_registry.metadata.create_all(bind=engine)
 
-# ------------------------------------------------------------
-# Fixtures
-# ------------------------------------------------------------
+
+# Fixtures de limpeza
 @pytest.fixture(scope="session", autouse=True)
 def cleanup():
-    """Remove o arquivo de banco de dados após todos os testes."""
     yield
     engine.dispose()
     os.unlink(_temp_db_path)
 
+
 @pytest.fixture
 def db_session():
-    """Sessão isolada para cada teste – com rollback automático."""
     session = TestingSessionLocal()
     yield session
     session.rollback()
     session.close()
 
+
 @pytest.fixture
 def client():
     return TestClient(app)
 
-# Categoria única (escopo session) – usa a sessão global
+
+@pytest.fixture
+def cliente_comum(db_session): 
+    db_session.query(Cliente).filter(Cliente.email == "joao@teste.com").delete()
+    cliente = Cliente(
+        nome="João",
+        email="joao@teste.com",
+        senha_hash=get_password_hash("123456"),
+        telefone=None,
+        documento=None,
+        ativo=True,
+    )
+    db_session.add(cliente)
+    db_session.commit()
+    db_session.refresh(cliente)
+    return cliente
+
+
+@pytest.fixture
+def cliente_token(client, cliente_comum):
+    response = client.post("/auth/token", data={
+        "username": cliente_comum.email,
+        "password": "123456"
+    })
+    assert response.status_code == 200
+    return response.json()["access_token"]
+
+
+@pytest.fixture
+def cliente_headers(cliente_token):
+    return {"Authorization": f"Bearer {cliente_token}"}
+
+
+# Admin similar (escopo function)
+@pytest.fixture
+def admin_user(db_session):
+    admin = db_session.query(Funcionario).filter_by(email="admin@teste.com").first()
+    if not admin:
+        admin = Funcionario(
+            nome="Admin Teste",
+            email="admin@teste.com",
+            senha_hash=get_password_hash("admin123"),
+            cargo="admin",
+            telefone="11999999999",
+            ativo=True
+        )
+        db_session.add(admin)
+        db_session.commit()
+        db_session.refresh(admin)
+    return admin
+
+
+@pytest.fixture
+def admin_token(client, admin_user):
+    response = client.post("/auth/token", data={
+        "username": admin_user.email,
+        "password": "admin123"
+    })
+    assert response.status_code == 200
+    return response.json()["access_token"]
+
+
+@pytest.fixture
+def admin_headers(admin_token):
+    return {"Authorization": f"Bearer {admin_token}"}
+
+
 @pytest.fixture(scope="session")
 def sample_categoria():
     session = TestingSessionLocal()
@@ -99,49 +132,6 @@ def sample_categoria():
     session.close()
     return cat
 
-# Admin único (escopo session)
-@pytest.fixture(scope="session")
-def admin_user():
-    session = TestingSessionLocal()
-    admin = session.query(Funcionario).filter_by(email="admin@teste.com").first()
-    if not admin:
-        admin = Funcionario(
-            nome="Admin Teste",
-            email="admin@teste.com",
-            senha_hash=get_password_hash("admin123"),
-            cargo="admin",
-            telefone="11999999999",
-            data_contratacao=datetime.now(),
-            ultimo_login=None,
-            ativo=True,
-        )
-        session.add(admin)
-        session.commit()
-        session.refresh(admin)
-    session.close()
-    return admin
-
-# Cliente comum único (escopo session)
-@pytest.fixture(scope="session")
-def cliente_comum():
-    session = TestingSessionLocal()
-    cliente = session.query(Cliente).filter_by(email="joao@teste.com").first()
-    if not cliente:
-        cliente = Cliente(
-            nome="João",
-            email="joao@teste.com",
-            senha_hash=get_password_hash("123456"),
-            telefone=None,
-            documento=None,
-            data_cadastro=datetime.now(),
-            ultimo_login=None,
-            ativo=True,
-        )
-        session.add(cliente)
-        session.commit()
-        session.refresh(cliente)
-    session.close()
-    return cliente
 
 @pytest.fixture
 def sample_produto(db_session, sample_categoria):

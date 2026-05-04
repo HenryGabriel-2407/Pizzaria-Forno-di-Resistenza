@@ -420,7 +420,7 @@ def atualizar_status_comanda(
 
 @router.get('/{comanda_id}/status-logs', response_model=List[StatusComandaLogResponse])
 def obter_logs_status(comanda_id: int, session: Session = Depends(get_session)):
-    comanda = _obter_comanda(comanda_id, session)
+    _obter_comanda(comanda_id, session)
     logs = session.scalars(
         select(StatusComandaLog)
         .where(StatusComandaLog.id_comanda == comanda_id)

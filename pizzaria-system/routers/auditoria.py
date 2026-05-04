@@ -1,44 +1,43 @@
-# routers/audit_log.py
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, func
-from sqlalchemy.orm import Session, selectinload
-from typing import List, Optional
 from datetime import datetime
 from http import HTTPStatus
+from typing import List, Optional, Union
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from pizzaria_system.database import get_session
-from pizzaria_system.models import AuditLog, Funcionario
-from pizzaria_system.schemas import (
-    AuditLogResponse,
-    MessageResponse,
-    AuditLogFilter
-)
+from pizzaria_system.models import AuditLog, Cliente, Funcionario
+from pizzaria_system.schemas import AuditLogResponse
+from pizzaria_system.security import get_current_user
 
 router = APIRouter(prefix='/audit-logs', tags=['auditoria'])
 
-# ---------- UTILITÁRIOS ----------
-def _verificar_admin(funcionario_id: int, session: Session) -> None:
-    """Verifica se o funcionário é admin. Por enquanto, apenas se id existe e cargo admin.
-       Em produção, use token JWT com role."""
-    # Simulação: recebemos um funcionario_id via query ou header.
-    # Idealmente, extrair do token JWT.
-    if funcionario_id:
-        func = session.get(Funcionario, funcionario_id)
-        if not func or func.cargo not in ['admin', 'gerente']:
-            raise HTTPException(
-                status_code=HTTPStatus.FORBIDDEN,
-                detail="Acesso negado. Apenas administradores podem visualizar logs de auditoria."
-            )
-    else:
+
+# ---------- UTILITÁRIO DE PERMISSÃO ----------
+def _verificar_permissao_auditoria(current_user: Union[Cliente, Funcionario]) -> None:
+    """
+    Verifica se o usuário autenticado é funcionário com cargo 'admin' ou 'gerente'.
+    Levanta HTTPException 403 se não tiver permissão.
+    """
+    if not isinstance(current_user, Funcionario):
         raise HTTPException(
-            status_code=HTTPStatus.UNAUTHORIZED,
-            detail="Identificação de funcionário necessária."
+            status_code=HTTPStatus.FORBIDDEN,
+            detail="Acesso negado. Apenas funcionários podem visualizar logs de auditoria."
         )
+    if current_user.cargo not in ['admin', 'gerente']:
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail="Acesso negado. Necessário cargo de administrador ou gerente."
+        )
+
 
 # ---------- ENDPOINTS ----------
 @router.get('/', response_model=List[AuditLogResponse])
 def listar_logs(
     session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
+    # Filtros
     usuario_tipo: Optional[str] = Query(None, description="cliente, funcionario, sistema"),
     usuario_id: Optional[int] = None,
     funcionario_id: Optional[int] = None,
@@ -47,16 +46,22 @@ def listar_logs(
     registro_id: Optional[int] = None,
     data_inicio: Optional[datetime] = None,
     data_fim: Optional[datetime] = None,
+    # Paginação e ordenação
     limite: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    # Em produção, obter funcionario_id do token
-    admin_funcionario_id: int = Query(..., description="ID do funcionário admin autenticado")
+    order_by: str = Query("timestamp", description="Campo para ordenar (timestamp, acao, etc.)"),
+    order: str = Query("desc", regex="^(asc|desc)$", description="asc ou desc"),
 ):
     """
-    Lista logs de auditoria com filtros e paginação.
-    Acesso restrito a administradores.
+    Lista logs de auditoria com filtros, paginação e ordenação.
+    Acesso restrito a funcionários com cargo admin ou gerente.
     """
-    _verificar_admin(admin_funcionario_id, session)
+    _verificar_permissao_auditoria(current_user)
+
+    # Validações de ordenação segura (whitelist de colunas)
+    colunas_permitidas = {"timestamp", "acao", "usuario_tipo", "tabela_afetada"}
+    if order_by not in colunas_permitidas:
+        order_by = "timestamp"
 
     query = select(AuditLog)
     if usuario_tipo:
@@ -76,7 +81,13 @@ def listar_logs(
     if data_fim:
         query = query.where(AuditLog.timestamp <= data_fim)
 
-    query = query.order_by(AuditLog.timestamp.desc()).offset(offset).limit(limite)
+    # Ordenação dinâmica segura
+    if order == "asc":
+        query = query.order_by(getattr(AuditLog, order_by).asc())
+    else:
+        query = query.order_by(getattr(AuditLog, order_by).desc())
+
+    query = query.offset(offset).limit(limite)
     logs = session.scalars(query).all()
     return logs
 
@@ -85,10 +96,10 @@ def listar_logs(
 def obter_log(
     log_id: int,
     session: Session = Depends(get_session),
-    admin_funcionario_id: int = Query(..., description="ID do funcionário admin autenticado")
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
 ):
     """Retorna um log específico."""
-    _verificar_admin(admin_funcionario_id, session)
+    _verificar_permissao_auditoria(current_user)
     log = session.get(AuditLog, log_id)
     if not log:
         raise HTTPException(HTTPStatus.NOT_FOUND, "Log não encontrado.")
@@ -98,10 +109,10 @@ def obter_log(
 @router.get('/acoes/disponiveis', response_model=List[str])
 def listar_acoes_disponiveis(
     session: Session = Depends(get_session),
-    admin_funcionario_id: int = Query(..., description="ID do funcionário admin autenticado")
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
 ):
     """Retorna lista de ações distintas registradas nos logs (para filtro)."""
-    _verificar_admin(admin_funcionario_id, session)
+    _verificar_permissao_auditoria(current_user)
     result = session.scalars(select(AuditLog.acao).distinct()).all()
     return result
 
@@ -109,22 +120,31 @@ def listar_acoes_disponiveis(
 @router.get('/tabelas/disponiveis', response_model=List[str])
 def listar_tabelas_afetadas(
     session: Session = Depends(get_session),
-    admin_funcionario_id: int = Query(..., description="ID do funcionário admin autenticado")
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
 ):
     """Retorna lista de tabelas afetadas distintas (para filtro)."""
-    _verificar_admin(admin_funcionario_id, session)
+    _verificar_permissao_auditoria(current_user)
     result = session.scalars(select(AuditLog.tabela_afetada).distinct()).all()
     # Remove None se houver
     return [r for r in result if r is not None]
 
 
-# Opcional: endpoint para estatísticas de logs (por ação, por dia, etc.)
 @router.get('/estatisticas/por-acao')
 def estatisticas_por_acao(
     session: Session = Depends(get_session),
-    admin_funcionario_id: int = Query(..., description="ID do funcionário admin autenticado")
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
+    data_inicio: Optional[datetime] = None,
+    data_fim: Optional[datetime] = None,
 ):
-    _verificar_admin(admin_funcionario_id, session)
+    """
+    Retorna contagem de logs agrupados por ação.
+    Opcionalmente filtrando por período.
+    """
+    _verificar_permissao_auditoria(current_user)
     query = select(AuditLog.acao, func.count(AuditLog.id)).group_by(AuditLog.acao)
+    if data_inicio:
+        query = query.where(AuditLog.timestamp >= data_inicio)
+    if data_fim:
+        query = query.where(AuditLog.timestamp <= data_fim)
     results = session.execute(query).all()
     return {acao: count for acao, count in results}
