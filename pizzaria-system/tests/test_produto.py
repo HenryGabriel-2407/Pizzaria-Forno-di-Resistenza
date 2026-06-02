@@ -7,29 +7,15 @@ from pizzaria_system.database import engine
 from pizzaria_system.models import Combo, ComboProduto, Produto
 
 
-@pytest.fixture
-def admin_token(client, admin_user):
-    response = client.post(
-        "/auth/token",
-        data={"username": admin_user.email, "password": "admin123"},
-    )
-    assert response.status_code == HTTPStatus.OK
-    return response.json()["access_token"]
-
-
-@pytest.fixture
-def admin_headers(admin_token):
-    return {"Authorization": f"Bearer {admin_token}"}
-
-
-@pytest.fixture
-def cliente_token(client, cliente_comum):
-    response = client.post(
-        "/auth/token",
-        data={"username": cliente_comum.email, "password": "123456"},
-    )
-    assert response.status_code == HTTPStatus.OK
-    return response.json()["access_token"]
+@pytest.fixture(autouse=True)
+def clean_produtos(db_session):
+    """Remove todos os produtos antes de cada teste."""
+    db_session.query(Produto).delete()
+    db_session.commit()
+    yield
+    # (opcional) também limpa após o teste
+    db_session.query(Produto).delete()
+    db_session.commit()
 
 
 # ------------------------------------------------------------

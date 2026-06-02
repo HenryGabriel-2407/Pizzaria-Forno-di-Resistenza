@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from pizzaria_system.database import get_session
 from pizzaria_system.models import Comanda, Mesa
 from pizzaria_system.schemas import MesaCreate, MesaResponse, MesaUpdate, MessageResponse
+from pizzaria_system.settings import Settings
 
 router = APIRouter(prefix='/mesas', tags=['mesas'])
 
@@ -54,17 +55,18 @@ def criar_mesa(
     mesa_data: MesaCreate,
     session: Session = Depends(get_session)
 ):
-    """
-    Cria uma nova mesa física no salão.
-    - Verifica se o número da mesa é único.
-    - O campo `codigo_qr` é opcional, mas se fornecido, deve ser único.
-    """
     _verificar_numero_existente(mesa_data.numero, session)
-    if mesa_data.codigo_qr:
-        _verificar_codigo_qr_existente(mesa_data.codigo_qr, session)
 
+    # Cria a mesa sem o codigo_qr
     nova_mesa = Mesa(**mesa_data.model_dump())
     session.add(nova_mesa)
+    session.flush()  # Gera o ID
+
+    # Gera a string do QR code (URL base + ID da mesa)
+    settings = Settings()
+    qr_string = f"{settings.BASE_URL}/mesa/{nova_mesa.id}"
+    nova_mesa.codigo_qr = qr_string
+
     session.commit()
     session.refresh(nova_mesa)
     return nova_mesa
@@ -216,27 +218,3 @@ def reservar_mesa(
     session.commit()
     session.refresh(mesa)
     return mesa
-
-
-# ---------- ENDPOINT PARA GERAR QR CODE (simulação) ----------
-@router.post('/{mesa_id}/gerar-qrcode', response_model=MessageResponse)
-def gerar_qrcode_mesa(
-    mesa_id: int,
-    session: Session = Depends(get_session)
-):
-    """
-    Gera um código QR para a mesa (simulação). 
-    Em produção, você usaria uma biblioteca como `qrcode` e salvaria a imagem.
-    """
-    mesa = _obter_mesa_por_id(mesa_id, session)
-    import uuid
-    novo_qr = str(uuid.uuid4())
-    # Verifica unicidade (embora UUID seja quase único)
-    _verificar_codigo_qr_existente(novo_qr, session, mesa_id)
-    mesa.codigo_qr = novo_qr
-    session.add(mesa)
-    session.commit()
-    return MessageResponse(
-        message=f"QR Code gerado para mesa {mesa.numero}: {novo_qr}",
-        success=True
-    )

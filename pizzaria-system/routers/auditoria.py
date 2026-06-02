@@ -50,7 +50,7 @@ def listar_logs(
     limite: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     order_by: str = Query("timestamp", description="Campo para ordenar (timestamp, acao, etc.)"),
-    order: str = Query("desc", regex="^(asc|desc)$", description="asc ou desc"),
+    order: str = Query("desc", pattern="^(asc|desc)$", description="asc ou desc"),
 ):
     """
     Lista logs de auditoria com filtros, paginação e ordenação.

@@ -8,3 +8,12 @@ class Settings(BaseSettings):
     SECRET_KEY: str
     ALGORITHM: str
     ACCESS_TOKEN_EXPIRE_MINUTES: int
+    ADMIN_EMAIL: str
+    ADMIN_PASSWORD: str
+    ADMIN_NAME: str
+    BASE_URL: str = "http://localhost:8000"
+
+    SMTP_PASSWORD: str
+    SMTP_FROM_EMAIL: str
+    SMTP_SERVER: str
+    SMTP_PORT: int

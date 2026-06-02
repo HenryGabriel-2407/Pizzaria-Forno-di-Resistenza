@@ -1,4 +1,5 @@
 from datetime import datetime
+from enum import Enum
 from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -217,6 +218,13 @@ class ClienteMeResponse(ClienteResponse):
 # ==================================================================
 
 
+class CargoFuncionario(str, Enum):
+    garcom = "garcom"
+    cozinha = "cozinha"
+    admin = "admin"
+    gerente = "gerente"
+
+
 class FuncionarioBase(BaseModel):
     nome: str
     email: EmailStr
@@ -227,6 +235,7 @@ class FuncionarioBase(BaseModel):
 
 class FuncionarioCreate(FuncionarioBase):
     senha: str = Field(..., min_length=6)
+    cargo: CargoFuncionario
 
 
 class FuncionarioResponse(FuncionarioBase):
@@ -275,8 +284,10 @@ class MesaBase(BaseModel):
     codigo_qr: Optional[str] = None
 
 
-class MesaCreate(MesaBase):
-    pass
+class MesaCreate(BaseModel):
+    numero: int = Field(..., gt=0)
+    qtd_lugares: int = Field(4, ge=1)
+    status: str = Field('livre', pattern='^(livre|ocupada|reservada)$')
 
 
 class MesaResponse(MesaBase):
@@ -591,6 +602,29 @@ class PagamentoConfirmacao(BaseModel):
     comanda_id: int
     transacao_id: str
     status: str  # 'aprovado', 'falhou'
+
+
+# ==================================================================
+# Schemas para redefinição de senha
+# ==================================================================
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    token: str = Field(..., min_length=6, max_length=6)
+    new_password: str = Field(..., min_length=6)
+
+
+class ForgotPasswordResponse(BaseModel):
+    message: str
+    token_ttl_minutes: int
+
+
+class ResetPasswordResponse(BaseModel):
+    message: str
 
 
 # ==================================================================

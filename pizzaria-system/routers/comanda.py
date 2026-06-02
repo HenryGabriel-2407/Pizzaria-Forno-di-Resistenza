@@ -1,6 +1,6 @@
 from datetime import datetime
 from http import HTTPStatus
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -31,6 +31,7 @@ from pizzaria_system.schemas import (
     StatusComandaLogResponse,
     StatusUpdateRequest,
 )
+from pizzaria_system.security import get_current_user
 
 router = APIRouter(prefix='/comandas', tags=['comandas'])
 
@@ -43,7 +44,7 @@ def _obter_comanda(comanda_id: int, session: Session) -> Comanda:
     return comanda
 
 
-def _calcular_totais_comanda(comanda: Comanda, session: Session) -> None:
+def _calcular_totais_comanda(comanda: Comanda) -> None:
     """Recalcula preco_total, subtotais dos itens e valor_a_pagar."""
     if not comanda.pedido_itens:
         comanda.preco_total = 0.0
@@ -60,16 +61,15 @@ def _calcular_totais_comanda(comanda: Comanda, session: Session) -> None:
         comanda.valor_a_pagar = 0.0
 
 
-def _criar_status_log(comanda_id: int, status_anterior: str, status_novo: str,
-                      alterado_por_tipo: str, alterado_por_id: int,
-                      observacao: str, session: Session) -> None:
+def _criar_status_log(comanda_id: int, status_anterior: str, status_novo: str, alterado_por_tipo: str, alterado_por_id: int, observacao: str, session: Session) -> None:
     log = StatusComandaLog(
         id_comanda=comanda_id,
         status_anterior=status_anterior,
         status_novo=status_novo,
         alterado_por_tipo=alterado_por_tipo,
         alterado_por_id=alterado_por_id,
-        observacao=observacao
+        observacao=observacao,
+        timestamp=datetime.now()
     )
     session.add(log)
 
@@ -114,21 +114,15 @@ def _validar_itens_pedido(itens_data: List[PedidoItemCreate], session: Session) 
     return itens_validados
 
 
-# ---------- CRUD COMANDA ----------
-@router.post('/', response_model=ComandaResponse, status_code=HTTPStatus.CREATED)
-def criar_comanda(
-    comanda_data: ComandaCreate,
-    session: Session = Depends(get_session)
-):
-    """
-    Cria uma nova comanda com seus itens.
-    - Regra: id_cliente ou id_mesa deve ser informado.
-    - Os preços unitários são obtidos do banco (produto/combo).
-    """
-    # Validação básica
-    if not comanda_data.id_cliente and not comanda_data.id_mesa:
-        raise HTTPException(HTTPStatus.BAD_REQUEST,
-            "Comanda deve ter cliente (pedido online) ou mesa (local).")
+def _is_admin(user: Union[Cliente, Funcionario]) -> bool:
+    return isinstance(user, Funcionario) and user.cargo == 'admin'
+
+
+def _is_funcionario(user: Union[Cliente, Funcionario]) -> bool:
+    return isinstance(user, Funcionario)
+
+
+def _validar_cliente_mesa_garcom(comanda_data: ComandaCreate, session: Session) -> None:
     if comanda_data.id_cliente:
         cliente = session.get(Cliente, comanda_data.id_cliente)
         if not cliente:
@@ -139,42 +133,75 @@ def criar_comanda(
             raise HTTPException(HTTPStatus.NOT_FOUND, "Mesa não encontrada.")
     if comanda_data.id_garcom:
         garcom = session.get(Funcionario, comanda_data.id_garcom)
-        if not garcom or garcom.cargo not in ['garcom', 'gerente']:
+        if not garcom or garcom.cargo not in ['garcom', 'gerente', 'admin']:
             raise HTTPException(HTTPStatus.BAD_REQUEST, "Garçom inválido.")
+
+
+def _validar_metodo_pagamento(comanda_data: ComandaCreate, session: Session) -> None:
     metodo = session.get(MetodoPagamento, comanda_data.id_metodo_pagamento)
     if not metodo:
         raise HTTPException(HTTPStatus.NOT_FOUND, "Método de pagamento não encontrado.")
+
+
+def _validar_promocao(comanda_data: ComandaCreate, session: Session) -> None:
     if comanda_data.id_cod_promocional:
         promo = session.get(CodPromocional, comanda_data.id_cod_promocional)
         if not promo or not promo.ativo or promo.data_validade < datetime.now():
             raise HTTPException(HTTPStatus.BAD_REQUEST, "Código promocional inválido ou expirado.")
 
-    # Valida e calcula itens
+
+# ---------- CRUD COMANDA ----------
+@router.post('/', response_model=ComandaResponse, status_code=HTTPStatus.CREATED)
+def criar_comanda(
+    comanda_data: ComandaCreate,
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
+):
+    # Se for cliente, força id_cliente
+    if isinstance(current_user, Cliente):
+        if comanda_data.id_cliente is not None and comanda_data.id_cliente != current_user.id:
+            raise HTTPException(HTTPStatus.FORBIDDEN,
+                "Cliente só pode criar comanda para si mesmo.")
+        comanda_data.id_cliente = current_user.id
+
+    if not comanda_data.id_cliente and not comanda_data.id_mesa:
+        raise HTTPException(HTTPStatus.BAD_REQUEST,
+            "Comanda deve ter cliente (pedido online) ou mesa (local).")
+
+    _validar_cliente_mesa_garcom(comanda_data, session)
+    _validar_metodo_pagamento(comanda_data, session)
+    _validar_promocao(comanda_data, session)
+
     itens_validados = _validar_itens_pedido(comanda_data.pedido_itens, session)
 
-    # Cria comanda
     comanda_dict = comanda_data.model_dump(exclude={'pedido_itens'})
+    comanda_dict['data_registro'] = None
+    comanda_dict['data_finalizacao'] = None
     nova_comanda = Comanda(**comanda_dict)
     session.add(nova_comanda)
-    session.flush()  # obtém id
+    session.flush()
 
-    # Adiciona itens
     for item in itens_validados:
         pedido_item = PedidoItem(id_comanda=nova_comanda.id, **item)
         session.add(pedido_item)
 
-    # Recalcula totais
-    _calcular_totais_comanda(nova_comanda, session)
-    # Cria log de criação (status inicial)
+    _calcular_totais_comanda(nova_comanda)
+
+    # Log de criação usando o current_user
+    if isinstance(current_user, Funcionario):
+        alterado_por_tipo = "funcionario"
+        alterado_por_id = current_user.id
+    else:
+        alterado_por_tipo = "cliente"
+        alterado_por_id = current_user.id
     _criar_status_log(
         nova_comanda.id, None, nova_comanda.status_comanda,
-        "sistema", None, "Comanda criada", session
+        alterado_por_tipo, alterado_por_id, "Comanda criada", session
     )
 
     session.commit()
     session.refresh(nova_comanda)
 
-    # Carrega relacionamentos para resposta
     result = session.scalar(
         select(Comanda)
         .where(Comanda.id == nova_comanda.id)
@@ -194,6 +221,7 @@ def criar_comanda(
 @router.get('/', response_model=List[ComandaResponse])
 def listar_comandas(
     session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
     status_comanda: Optional[str] = Query(None, description="aberta, em_preparo, pronta, entregue, cancelada, paga"),
     status_pagamento: Optional[str] = Query(None, description="pendente, pago, falhou"),
     tipo_entrega: Optional[str] = Query(None, description="delivery, local"),
@@ -205,7 +233,10 @@ def listar_comandas(
     limite: int = 100,
     offset: int = 0
 ):
-    """Lista comandas com filtros e paginação."""
+    """Lista comandas com filtros e paginação.
+    - Cliente só vê suas próprias comandas.
+    - Funcionário vê todas (com filtros).
+    """
     query = select(Comanda).options(
         selectinload(Comanda.cliente_rel),
         selectinload(Comanda.mesa_rel),
@@ -215,18 +246,22 @@ def listar_comandas(
         selectinload(Comanda.pedido_itens),
         selectinload(Comanda.status_logs)
     )
+    if isinstance(current_user, Cliente):
+        # Cliente só vê suas próprias comandas
+        query = query.where(Comanda.id_cliente == current_user.id)
+    else:
+        if id_cliente:
+            query = query.where(Comanda.id_cliente == id_cliente)
+        if id_mesa:
+            query = query.where(Comanda.id_mesa == id_mesa)
+        if id_garcom:
+            query = query.where(Comanda.id_garcom == id_garcom)
     if status_comanda:
         query = query.where(Comanda.status_comanda == status_comanda)
     if status_pagamento:
         query = query.where(Comanda.status_pagamento == status_pagamento)
     if tipo_entrega:
         query = query.where(Comanda.tipo_entrega == tipo_entrega)
-    if id_cliente:
-        query = query.where(Comanda.id_cliente == id_cliente)
-    if id_mesa:
-        query = query.where(Comanda.id_mesa == id_mesa)
-    if id_garcom:
-        query = query.where(Comanda.id_garcom == id_garcom)
     if data_inicio:
         query = query.where(Comanda.data_registro >= data_inicio)
     if data_fim:
@@ -237,7 +272,16 @@ def listar_comandas(
 
 
 @router.get('/{comanda_id}', response_model=ComandaResponse)
-def obter_comanda(comanda_id: int, session: Session = Depends(get_session)):
+def obter_comanda(
+    comanda_id: int,
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
+):
+    """
+    Retorna detalhes de uma comanda.
+    - Cliente só pode ver suas próprias comandas.
+    - Funcionário pode ver qualquer comanda.
+    """
     comanda = session.scalar(
         select(Comanda)
         .where(Comanda.id == comanda_id)
@@ -253,6 +297,9 @@ def obter_comanda(comanda_id: int, session: Session = Depends(get_session)):
     )
     if not comanda:
         raise HTTPException(HTTPStatus.NOT_FOUND, "Comanda não encontrada.")
+    if isinstance(current_user, Cliente):
+        if comanda.id_cliente != current_user.id:
+            raise HTTPException(HTTPStatus.FORBIDDEN, "Acesso negado a esta comanda.")
     return comanda
 
 
@@ -260,14 +307,17 @@ def obter_comanda(comanda_id: int, session: Session = Depends(get_session)):
 def atualizar_comanda(
     comanda_id: int,
     dados: ComandaUpdate,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
-    """Atualiza dados básicos da comanda (não itens, não status)."""
+    """Atualiza dados básicos da comanda (exceto itens / status). Apenas funcionários podem alterar."""
+    if not _is_funcionario(current_user):
+        raise HTTPException(HTTPStatus.FORBIDDEN, "Apenas funcionários podem atualizar dados da comanda.")
     comanda = _obter_comanda(comanda_id, session)
     for campo, valor in dados.model_dump(exclude_unset=True).items():
         setattr(comanda, campo, valor)
     # Se alterar taxa_entrega ou desconto, recalcula valor_a_pagar
-    _calcular_totais_comanda(comanda, session)
+    _calcular_totais_comanda(comanda)
     session.add(comanda)
     session.commit()
     session.refresh(comanda)
@@ -277,9 +327,12 @@ def atualizar_comanda(
 @router.delete('/{comanda_id}', response_model=MessageResponse)
 def deletar_comanda(
     comanda_id: int,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
-    """Remove comanda apenas se status for 'cancelada' ou 'aberta' (sem pagamento)."""
+    """Remove comanda apenas se status for 'cancelada' ou 'aberta'. Apenas funcionários ou o próprio cliente? Vamos permitir só funcionários."""
+    if not _is_funcionario(current_user):
+        raise HTTPException(HTTPStatus.FORBIDDEN, "Apenas funcionários podem excluir comandas.")
     comanda = _obter_comanda(comanda_id, session)
     if comanda.status_pagamento == 'pago':
         raise HTTPException(HTTPStatus.BAD_REQUEST,
@@ -287,6 +340,7 @@ def deletar_comanda(
     if comanda.status_comanda not in ['aberta', 'cancelada']:
         raise HTTPException(HTTPStatus.BAD_REQUEST,
             "Comanda já em preparo ou finalizada; não pode ser excluída.")
+    session.query(PedidoItem).filter(PedidoItem.id_comanda == comanda_id).delete()
     session.delete(comanda)
     session.commit()
     return MessageResponse(message="Comanda removida.", success=True)
@@ -297,9 +351,19 @@ def deletar_comanda(
 def adicionar_item_comanda(
     comanda_id: int,
     item_data: PedidoItemCreateSemComanda,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
+    """
+    Adiciona item à comanda.
+    - Cliente só pode adicionar item à sua própria comanda (se comanda.id_cliente == current_user.id).
+    - Funcionário pode adicionar a qualquer comanda.
+    """
     comanda = _obter_comanda(comanda_id, session)
+    if isinstance(current_user, Cliente):
+        if comanda.id_cliente != current_user.id:
+            raise HTTPException(HTTPStatus.FORBIDDEN, "Você não pode modificar esta comanda.")
+
     if comanda.status_comanda not in ['aberta']:
         raise HTTPException(HTTPStatus.BAD_REQUEST,
             "Não é possível adicionar itens a uma comanda já em preparo ou finalizada.")
@@ -317,6 +381,7 @@ def adicionar_item_comanda(
         if not combo or not combo.disponivel:
             raise HTTPException(HTTPStatus.BAD_REQUEST, "Combo inválido ou indisponível.")
         preco = combo.preco
+
     novo_item = PedidoItem(
         id_comanda=comanda_id,
         id_produto=item_data.id_produto,
@@ -327,7 +392,8 @@ def adicionar_item_comanda(
         observacao=item_data.observacao
     )
     session.add(novo_item)
-    _calcular_totais_comanda(comanda, session)
+    comanda.pedido_itens.append(novo_item)
+    _calcular_totais_comanda(comanda)
     session.commit()
     session.refresh(novo_item)
     return novo_item
@@ -337,22 +403,33 @@ def adicionar_item_comanda(
 def atualizar_item_comanda(
     item_id: int,
     dados: PedidoItemUpdate,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
+    """Atualiza quantidade/observação do item. Apenas se comanda estiver aberta e usuário autorizado."""
     item = session.get(PedidoItem, item_id)
     if not item:
         raise HTTPException(HTTPStatus.NOT_FOUND, "Item não encontrado.")
-    comanda = item.comanda_rel
+
+    comanda = item.comanda_rel   # Obtém a comanda associada
+
+    # Permissão: cliente só pode modificar itens de suas próprias comandas
+    if isinstance(current_user, Cliente):
+        if comanda.id_cliente != current_user.id:
+            raise HTTPException(HTTPStatus.FORBIDDEN, "Você não pode modificar este item.")
+
     if comanda.status_comanda not in ['aberta']:
         raise HTTPException(HTTPStatus.BAD_REQUEST,
             "Comanda já em preparo ou finalizada, não pode alterar itens.")
+
     if dados.quantidade is not None:
         item.quantidade = dados.quantidade
         item.subtotal = item.preco_unitario * dados.quantidade
     if dados.observacao is not None:
         item.observacao = dados.observacao
+
     session.add(item)
-    _calcular_totais_comanda(comanda, session)
+    _calcular_totais_comanda(comanda)   # Recalcula totais da comanda
     session.commit()
     session.refresh(item)
     return item
@@ -361,17 +438,26 @@ def atualizar_item_comanda(
 @router.delete('/itens/{item_id}', response_model=MessageResponse)
 def remover_item_comanda(
     item_id: int,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
+    """Remove item da comanda. Apenas se comanda aberta e usuário autorizado."""
     item = session.get(PedidoItem, item_id)
     if not item:
         raise HTTPException(HTTPStatus.NOT_FOUND, "Item não encontrado.")
+
     comanda = item.comanda_rel
+    if isinstance(current_user, Cliente):
+        if comanda.id_cliente != current_user.id:
+            raise HTTPException(HTTPStatus.FORBIDDEN, "Você não pode remover este item.")
+
     if comanda.status_comanda not in ['aberta']:
         raise HTTPException(HTTPStatus.BAD_REQUEST,
             "Comanda já em preparo ou finalizada, não pode remover itens.")
     session.delete(item)
-    _calcular_totais_comanda(comanda, session)
+    if item in comanda.pedido_itens:
+        comanda.pedido_itens.remove(item)
+    _calcular_totais_comanda(comanda)
     session.commit()
     return MessageResponse(message="Item removido da comanda.", success=True)
 
@@ -382,15 +468,12 @@ def atualizar_status_comanda(
     comanda_id: int,
     dados: StatusUpdateRequest,
     session: Session = Depends(get_session),
-    # O ideal é obter o usuário logado (cliente ou funcionário). Por simplicidade, recebemos via query ou header.
-    alterado_por_tipo: str = Query(..., description="cliente, funcionario, sistema"),
-    alterado_por_id: int = Query(..., description="id do cliente ou funcionário")
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
 ):
     comanda = _obter_comanda(comanda_id, session)
     status_anterior = comanda.status_comanda
     novo_status = dados.status_novo
 
-    # Valida transições básicas
     transicoes_validas = {
         'aberta': ['em_preparo', 'cancelada'],
         'em_preparo': ['pronta', 'cancelada'],
@@ -403,6 +486,15 @@ def atualizar_status_comanda(
         raise HTTPException(HTTPStatus.BAD_REQUEST,
             f"Não é permitido mudar de '{status_anterior}' para '{novo_status}'.")
 
+    # Verificar permissões
+    if isinstance(current_user, Cliente):
+        # Cliente só pode cancelar comanda aberta
+        if not (status_anterior == 'aberta' and novo_status == 'cancelada'):
+            raise HTTPException(HTTPStatus.FORBIDDEN,
+                "Cliente só pode cancelar uma comanda em aberto.")
+    # Funcionário pode fazer qualquer transição válida
+
+    # Aplica a mudança
     comanda.status_comanda = novo_status
     if novo_status == 'paga':
         comanda.status_pagamento = 'pago'
@@ -411,16 +503,35 @@ def atualizar_status_comanda(
         comanda.status_pagamento = 'falhou'
 
     session.add(comanda)
-    _criar_status_log(comanda_id, status_anterior, novo_status,
-                      alterado_por_tipo, alterado_por_id, dados.observacao, session)
+
+    # Determina tipo e ID do responsável
+    if isinstance(current_user, Cliente):
+        alterado_por_tipo = "cliente"
+        alterado_por_id = current_user.id
+    else:
+        alterado_por_tipo = "funcionario"
+        alterado_por_id = current_user.id
+
+    _criar_status_log(
+        comanda_id, status_anterior, novo_status,
+        alterado_por_tipo, alterado_por_id, dados.observacao, session
+    )
     session.commit()
     session.refresh(comanda)
     return comanda
 
 
 @router.get('/{comanda_id}/status-logs', response_model=List[StatusComandaLogResponse])
-def obter_logs_status(comanda_id: int, session: Session = Depends(get_session)):
-    _obter_comanda(comanda_id, session)
+def obter_logs_status(
+    comanda_id: int,
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
+):
+    """Retorna o histórico de mudanças de status. Cliente só vê se for sua comanda."""
+    comanda = _obter_comanda(comanda_id, session)
+    if isinstance(current_user, Cliente):
+        if comanda.id_cliente != current_user.id:
+            raise HTTPException(HTTPStatus.FORBIDDEN, "Acesso negado.")
     logs = session.scalars(
         select(StatusComandaLog)
         .where(StatusComandaLog.id_comanda == comanda_id)

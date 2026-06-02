@@ -1,19 +1,24 @@
 # routes/combo.py
 from http import HTTPStatus
-from typing import List
+from typing import List, Union
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from pizzaria_system.database import get_session
-from pizzaria_system.models import Combo, ComboProduto, Produto
+from pizzaria_system.models import Cliente, Combo, ComboProduto, Funcionario, Produto
 from pizzaria_system.schemas import ComboCreate, ComboResponse, ComboUpdate, MessageResponse
+from pizzaria_system.security import get_current_user
 
 router = APIRouter(prefix='/combos', tags=['combos'])
 
 
 # ---------- UTILITÁRIOS ----------
+def _is_admin(user: Union[Cliente, Funcionario]) -> bool:
+    return isinstance(user, Funcionario) and user.cargo == 'admin'
+
+
 def _verificar_produtos_existentes(produtos_ids: List[int], session: Session) -> List[Produto]:
     """
     Verifica se todos os produtos informados existem.
@@ -65,17 +70,19 @@ def _atualizar_produtos_do_combo(combo_id: int, produtos_ids: List[int], session
 
 
 # ---------- CRUD COMBO ----------
-
 @router.post('/', response_model=ComboResponse, status_code=HTTPStatus.CREATED, summary="Criar novo combo")
 def criar_combo(
     combo_data: ComboCreate,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
     """
     Cria um novo combo no cardápio.
     - Verifica se todos os produtos informados existem.
     - Os campos `popular`, `disponivel` e `tempo_preparo_medio` são opcionais.
     """
+    if not _is_admin(current_user):
+        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Apenas administradores podem criar combos.")
     # Verifica se todos os produtos existem
     produtos = _verificar_produtos_existentes(combo_data.produtos_ids, session)
 
@@ -144,13 +151,17 @@ def obter_combo(
 def atualizar_combo(
     combo_id: int,
     dados: ComboUpdate,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
     """
     Atualiza os campos informados do combo.
     - Se `produtos_ids` for enviado, verifica se todos os produtos existem.
     - Atualização parcial (apenas campos enviados).
     """
+    if not _is_admin(current_user):
+        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Apenas administradores podem alterar combos.")
+
     combo = _verificar_combo_existente(combo_id, session)
 
     # Se a lista de produtos está sendo alterada, valida e atualiza
@@ -173,12 +184,15 @@ def atualizar_combo(
 @router.delete('/{combo_id}', response_model=MessageResponse, summary="Remover combo")
 def deletar_combo(
     combo_id: int,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
     """
     Remove um combo do cardápio.
     - Remove também as associações na tabela combo_produto (cascade).
     """
+    if not _is_admin(current_user):
+        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Apenas administradores podem remover combos.")
     combo = _verificar_combo_existente(combo_id, session)
 
     # Remove associações primeiro (opcional, se não tiver cascade)
@@ -198,12 +212,15 @@ def deletar_combo(
 def adicionar_produto_ao_combo(
     combo_id: int,
     produto_id: int,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
     """
     Adiciona um produto existente a um combo existente.
     Útil para adicionar produtos sem precisar enviar toda a lista.
     """
+    if not _is_admin(current_user):
+        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Apenas administradores podem modificar combos.")
     combo = _verificar_combo_existente(combo_id, session)
     produto = session.get(Produto, produto_id)
 
@@ -249,12 +266,15 @@ def adicionar_produto_ao_combo(
 def remover_produto_do_combo(
     combo_id: int,
     produto_id: int,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
     """
     Remove um produto de um combo existente.
     Não remove o produto nem o combo, apenas a associação.
     """
+    if not _is_admin(current_user):
+        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Apenas administradores podem modificar combos.")
     combo = _verificar_combo_existente(combo_id, session)
     produto = session.get(Produto, produto_id)
 

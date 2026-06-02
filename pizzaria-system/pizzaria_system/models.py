@@ -177,7 +177,7 @@ class Mesa:
     id: Mapped[int] = mapped_column(init=False, primary_key=True)
     numero: Mapped[int] = mapped_column(unique=True, nullable=False)
     codigo_qr: Mapped[Optional[str]] = mapped_column(
-        unique=True, nullable=True
+        init=False, unique=True, nullable=True
     )
     qtd_lugares: Mapped[int] = mapped_column(nullable=False, default=4)
     status: Mapped[str] = mapped_column(default='livre')
@@ -325,3 +325,19 @@ class AuditLog:
         Index('idx_audit_funcionario', 'funcionario_id'),
         Index('idx_audit_registro', 'tabela_afetada', 'registro_id'),
     )
+
+
+# ==================================================================
+# 10. REDEFINIÇÃO DE SENHA (tokens temporários)
+# ==================================================================
+
+@table_registry.mapped_as_dataclass(kw_only=True)
+class PasswordResetToken:
+    __tablename__ = 'password_reset_token'
+
+    id: Mapped[int] = mapped_column(init=False, primary_key=True)
+    email: Mapped[str] = mapped_column(nullable=False, index=True)
+    token_hash: Mapped[str] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), init=False)
+    expires_at: Mapped[datetime] = mapped_column(nullable=False)
+    used: Mapped[bool] = mapped_column(default=False)

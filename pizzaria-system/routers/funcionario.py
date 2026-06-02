@@ -100,10 +100,7 @@ def listar_funcionarios(
     if cargo:
         allowed_cargos = ['garcom', 'cozinha', 'admin', 'gerente']
         if cargo not in allowed_cargos:
-            raise HTTPException(
-                status_code=HTTPStatus.BAD_REQUEST,
-                detail=f"Cargo deve ser um de: {', '.join(allowed_cargos)}"
-            )
+            raise HTTPException(HTTPStatus.BAD_REQUEST, f"Cargo deve ser um de: {', '.join(allowed_cargos)}")
         query = query.where(Funcionario.cargo == cargo)
     query = query.offset(offset).limit(limite)
     funcionarios = session.scalars(query).all()
@@ -112,10 +109,8 @@ def listar_funcionarios(
 
 @router.get('/me', response_model=FuncionarioResponse)
 def obter_meu_perfil_funcionario(
-    current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
-    session: Session = Depends(get_session)
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
-    """Retorna o perfil do próprio funcionário autenticado."""
     if not isinstance(current_user, Funcionario):
         raise HTTPException(
             status_code=HTTPStatus.FORBIDDEN,

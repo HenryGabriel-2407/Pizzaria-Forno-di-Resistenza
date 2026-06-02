@@ -3,6 +3,7 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from pizzaria_system.database import get_session
@@ -34,12 +35,18 @@ def criar_categoria(
     categoria_data: CategoriaProdutoCreate,
     session: Session = Depends(get_session)
 ):
-    """Cria uma nova categoria de produto."""
-    nova_categoria = CategoriaProduto(**categoria_data.model_dump())
-    session.add(nova_categoria)
-    session.commit()
-    session.refresh(nova_categoria)
-    return nova_categoria
+    try:
+        nova_categoria = CategoriaProduto(**categoria_data.model_dump())
+        session.add(nova_categoria)
+        session.commit()
+        session.refresh(nova_categoria)
+        return nova_categoria
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail=f"Já existe uma categoria com o nome '{categoria_data.nome}'."
+        )
 
 
 @router.get('/', response_model=List[CategoriaProdutoResponse])
@@ -67,15 +74,28 @@ def atualizar_categoria(
     dados: CategoriaProdutoUpdate,
     session: Session = Depends(get_session)
 ):
-    """Atualiza uma categoria (apenas campos enviados)."""
     categoria = _verificar_categoria_existente(categoria_id, session)
 
-    for campo, valor in dados.model_dump(exclude_unset=True).items():
-        setattr(categoria, campo, valor)
+    # Se o nome não está sendo alterado, não há risco de duplicidade
+    if dados.nome is not None and dados.nome != categoria.nome:
+        try:
+            for campo, valor in dados.model_dump(exclude_unset=True).items():
+                setattr(categoria, campo, valor)
+            session.commit()
+            session.refresh(categoria)
+        except IntegrityError:
+            session.rollback()
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail=f"Já existe outra categoria com o nome '{dados.nome}'."
+            )
+    else:
+        # Atualização sem mudar o nome
+        for campo, valor in dados.model_dump(exclude_unset=True).items():
+            setattr(categoria, campo, valor)
+        session.commit()
+        session.refresh(categoria)
 
-    session.add(categoria)
-    session.commit()
-    session.refresh(categoria)
     return categoria
 
 

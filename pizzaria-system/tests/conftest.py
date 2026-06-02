@@ -89,19 +89,19 @@ def cliente_headers(cliente_token):
 # Admin similar (escopo function)
 @pytest.fixture
 def admin_user(db_session):
-    admin = db_session.query(Funcionario).filter_by(email="admin@teste.com").first()
-    if not admin:
-        admin = Funcionario(
-            nome="Admin Teste",
-            email="admin@teste.com",
-            senha_hash=get_password_hash("admin123"),
-            cargo="admin",
-            telefone="11999999999",
-            ativo=True
-        )
-        db_session.add(admin)
-        db_session.commit()
-        db_session.refresh(admin)
+    # Remove qualquer admin existente para garantir senha correta
+    db_session.query(Funcionario).filter_by(email="admin@teste.com").delete()
+    admin = Funcionario(
+        nome="Admin Teste",
+        email="admin@teste.com",
+        senha_hash=get_password_hash("admin123"),
+        cargo="admin",
+        telefone="11999999999",
+        ativo=True
+    )
+    db_session.add(admin)
+    db_session.commit()
+    db_session.refresh(admin)
     return admin
 
 

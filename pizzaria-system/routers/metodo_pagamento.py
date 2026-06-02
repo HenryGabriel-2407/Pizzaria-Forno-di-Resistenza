@@ -3,6 +3,7 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from pizzaria_system.database import get_session
@@ -35,11 +36,18 @@ def criar_metodo_pagamento(
     session: Session = Depends(get_session)
 ):
     """Cria um novo método de pagamento (ex: PIX, Dinheiro, Cartão)."""
-    novo_metodo = MetodoPagamento(**metodo_data.model_dump())
-    session.add(novo_metodo)
-    session.commit()
-    session.refresh(novo_metodo)
-    return novo_metodo
+    try:
+        novo_metodo = MetodoPagamento(**metodo_data.model_dump())
+        session.add(novo_metodo)
+        session.commit()
+        session.refresh(novo_metodo)
+        return novo_metodo
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail=f"Já existe um método de pagamento com o nome '{metodo_data.nome}'."
+        )
 
 
 @router.get('/', response_model=List[MetodoPagamentoResponse])
@@ -71,15 +79,28 @@ def atualizar_metodo_pagamento(
     dados: MetodoPagamentoUpdate,
     session: Session = Depends(get_session)
 ):
-    """Atualiza um método de pagamento (apenas campos enviados)."""
     metodo = _verificar_metodo_existente(metodo_id, session)
 
-    for campo, valor in dados.model_dump(exclude_unset=True).items():
-        setattr(metodo, campo, valor)
-
-    session.add(metodo)
-    session.commit()
-    session.refresh(metodo)
+    # Só faz sentido verificar se o nome está sendo alterado
+    if dados.nome is not None and dados.nome != metodo.nome:
+        try:
+            for campo, valor in dados.model_dump(exclude_unset=True).items():
+                setattr(metodo, campo, valor)
+            session.add(metodo)
+            session.commit()
+            session.refresh(metodo)
+        except IntegrityError:
+            session.rollback()
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST,
+                detail=f"Já existe outro método de pagamento com o nome '{dados.nome}'."
+            )
+    else:
+        # Atualização sem mudar nome – não há risco de duplicidade
+        for campo, valor in dados.model_dump(exclude_unset=True).items():
+            setattr(metodo, campo, valor)
+        session.commit()
+        session.refresh(metodo)
     return metodo
 
 

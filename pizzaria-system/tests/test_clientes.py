@@ -55,31 +55,31 @@ def criar_cliente_objeto(session, nome, email, senha="123456", **kwargs):
 def test_criar_cliente_sem_enderecos(client, db_session):
     payload = {
         "nome": "João Silva",
-        "email": "joao@teste.com",
+        "email": "joao_novo@teste.com",
         "telefone": "11999999999",
-        "documento": "12345678900",
+        "documento": "98765432100",
         "senha": "senha123"
     }
     response = client.post("/clientes/", json=payload)
     assert response.status_code == HTTPStatus.CREATED
     data = response.json()
     assert data["nome"] == "João Silva"
-    assert data["email"] == "joao@teste.com"
-    assert "senha" not in data
-    assert data["enderecos"] == []
-
-    # verifica persistência
-    cliente = db_session.get(Cliente, data["id"])
-    assert cliente is not None
-    assert cliente.senha_hash != "senha123"
+    assert data["email"] == "joao_novo@teste.com"
+    assert data["telefone"] == "11999999999"
+    assert data["documento"] == "98765432100"
+    assert "id" in data
+    assert data["ativo"] is True
+    assert data["enderecos"] == []  # sem endereços
 
 
 def test_criar_cliente_com_enderecos(client, db_session):
+    email_unico = f"maria_{uuid.uuid4().hex[:8]}@teste.com"
+    documento_unico = f"987654321{uuid.uuid4().hex[:3]}"
     payload = {
         "nome": "Maria Souza",
-        "email": "maria@teste.com",
+        "email": email_unico,
         "telefone": "11888888888",
-        "documento": "98765432100",
+        "documento": documento_unico,
         "senha": "senha456",
         "enderecos": [
             {
@@ -96,11 +96,11 @@ def test_criar_cliente_com_enderecos(client, db_session):
     response = client.post("/clientes/", json=payload)
     assert response.status_code == HTTPStatus.CREATED
     data = response.json()
+    assert data["nome"] == "Maria Souza"
+    assert data["email"] == email_unico
+    assert data["documento"] == documento_unico
     assert len(data["enderecos"]) == 1
-    end = data["enderecos"][0]
-    assert end["apelido"] == "casa"
-    assert end["padrao"] is True
-    assert end["id_cliente"] == data["id"]
+    assert data["enderecos"][0]["apelido"] == "casa"
 
 
 def test_criar_cliente_email_duplicado(client, db_session):

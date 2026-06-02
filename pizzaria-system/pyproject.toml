@@ -21,6 +21,9 @@ pytest-cov = "^6.2.1"
 pwdlib = {extras = ["argon2"], version = "^0.2.1"}
 psycopg2-binary = "^2.9.10"
 psycopg = {extras = ["binary"], version = "^3.2.9"}
+python-dotenv = "^1.2.2"
+qrcode = "^8.2"
+pillow = "^12.2.0"
 
 [tool.ruff]
 line-length = 120
@@ -41,7 +44,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["PLR2004", "F841"]  # ignora magic numbers em testes
+"tests/*" = ["PLR2004", "F841", "PLR6301"]  # ignora magic numbers em testes
 
 [tool.taskipy.tasks]
 run = 'fastapi dev pizzaria_system/app.py'
