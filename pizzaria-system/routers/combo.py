@@ -2,10 +2,11 @@
 from http import HTTPStatus
 from typing import List, Union
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
+from pizzaria_system.audit import log_audit
 from pizzaria_system.database import get_session
 from pizzaria_system.models import Cliente, Combo, ComboProduto, Funcionario, Produto
 from pizzaria_system.schemas import ComboCreate, ComboResponse, ComboUpdate, MessageResponse
@@ -73,6 +74,7 @@ def _atualizar_produtos_do_combo(combo_id: int, produtos_ids: List[int], session
 @router.post('/', response_model=ComboResponse, status_code=HTTPStatus.CREATED, summary="Criar novo combo")
 def criar_combo(
     combo_data: ComboCreate,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
@@ -102,16 +104,26 @@ def criar_combo(
 
     session.commit()
     session.refresh(novo_combo)
+    dados_novos = ComboResponse.model_validate(novo_combo).model_dump()
 
-    # Carrega o combo com os relacionamentos para a resposta
+    log_audit(
+        session=session,
+        current_user=current_user,
+        acao='combo_create',
+        tabela_afetada='combo',
+        registro_id=novo_combo.id,
+        dados_novos=dados_novos,
+        request=request
+    )
+    session.commit()
     return novo_combo
 
 
 @router.get('/', response_model=List[ComboResponse], summary="Listar todos os combos")
 def listar_combos(
     session: Session = Depends(get_session),
-    disponivel: bool = None,          # filtro opcional
-    popular: bool = None              # filtro opcional
+    disponivel: bool = None,
+    popular: bool = None
 ):
     """
     Retorna a lista de combos. Permite filtrar por disponibilidade e popularidade.
@@ -151,6 +163,7 @@ def obter_combo(
 def atualizar_combo(
     combo_id: int,
     dados: ComboUpdate,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
@@ -163,13 +176,13 @@ def atualizar_combo(
         raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Apenas administradores podem alterar combos.")
 
     combo = _verificar_combo_existente(combo_id, session)
+    dados_anteriores = ComboResponse.model_validate(combo).model_dump()
 
     # Se a lista de produtos está sendo alterada, valida e atualiza
     if dados.produtos_ids is not None:
         _verificar_produtos_existentes(dados.produtos_ids, session)
         _atualizar_produtos_do_combo(combo_id, dados.produtos_ids, session)
 
-    # Aplica apenas os campos que vieram na requisição (excluindo produtos_ids)
     dados_dict = dados.model_dump(exclude_unset=True, exclude={'produtos_ids'})
     for campo, valor in dados_dict.items():
         setattr(combo, campo, valor)
@@ -177,13 +190,26 @@ def atualizar_combo(
     session.add(combo)
     session.commit()
     session.refresh(combo)
+    dados_novos = ComboResponse.model_validate(combo).model_dump()
 
+    log_audit(
+        session=session,
+        current_user=current_user,
+        acao='combo_update',
+        tabela_afetada='combo',
+        registro_id=combo.id,
+        dados_anteriores=dados_anteriores,
+        dados_novos=dados_novos,
+        request=request
+    )
+    session.commit()
     return combo
 
 
 @router.delete('/{combo_id}', response_model=MessageResponse, summary="Remover combo")
 def deletar_combo(
     combo_id: int,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
@@ -193,13 +219,24 @@ def deletar_combo(
     """
     if not _is_admin(current_user):
         raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Apenas administradores podem remover combos.")
+
     combo = _verificar_combo_existente(combo_id, session)
+    dados_anteriores = ComboResponse.model_validate(combo).model_dump()
 
-    # Remove associações primeiro (opcional, se não tiver cascade)
-    session.query(ComboProduto).filter(ComboProduto.combo_id == combo_id).delete()
+    combo.produtos.clear()
+    session.flush() 
 
-    # Remove o combo
     session.delete(combo)
+    session.commit()
+    log_audit(
+        session=session,
+        current_user=current_user,
+        acao='combo_delete',
+        tabela_afetada='combo',
+        registro_id=combo_id,
+        dados_anteriores=dados_anteriores,
+        request=request
+    )
     session.commit()
 
     return MessageResponse(
@@ -212,6 +249,7 @@ def deletar_combo(
 def adicionar_produto_ao_combo(
     combo_id: int,
     produto_id: int,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
@@ -252,6 +290,23 @@ def adicionar_produto_ao_combo(
     session.add(combo_produto)
     session.commit()
 
+    # Registra auditoria: adição de produto a combo
+    log_audit(
+        session=session,
+        current_user=current_user,
+        acao='combo_add_product',
+        tabela_afetada='combo_produto',
+        registro_id=None,
+        dados_novos={
+            'combo_id': combo_id,
+            'produto_id': produto_id,
+            'combo_nome': combo.nome,
+            'produto_nome': produto.nome
+        },
+        request=request
+    )
+    session.commit()
+
     return MessageResponse(
         message=f"Produto '{produto.nome}' adicionado ao combo '{combo.nome}' com sucesso.",
         success=True
@@ -266,6 +321,7 @@ def adicionar_produto_ao_combo(
 def remover_produto_do_combo(
     combo_id: int,
     produto_id: int,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
@@ -296,6 +352,21 @@ def remover_produto_do_combo(
             detail="Esta associação entre produto e combo não existe."
         )
 
+    session.commit()
+    log_audit(
+        session=session,
+        current_user=current_user,
+        acao='combo_remove_product',
+        tabela_afetada='combo_produto',
+        registro_id=None,
+        dados_novos={
+            'combo_id': combo_id,
+            'produto_id': produto_id,
+            'combo_nome': combo.nome,
+            'produto_nome': produto.nome
+        },
+        request=request
+    )
     session.commit()
 
     return MessageResponse(

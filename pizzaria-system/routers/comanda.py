@@ -2,10 +2,11 @@ from datetime import datetime
 from http import HTTPStatus
 from typing import List, Optional, Union
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from pizzaria_system.audit import log_audit
 from pizzaria_system.database import get_session
 from pizzaria_system.models import (
     Cliente,
@@ -61,19 +62,6 @@ def _calcular_totais_comanda(comanda: Comanda) -> None:
         comanda.valor_a_pagar = 0.0
 
 
-def _criar_status_log(comanda_id: int, status_anterior: str, status_novo: str, alterado_por_tipo: str, alterado_por_id: int, observacao: str, session: Session) -> None:
-    log = StatusComandaLog(
-        id_comanda=comanda_id,
-        status_anterior=status_anterior,
-        status_novo=status_novo,
-        alterado_por_tipo=alterado_por_tipo,
-        alterado_por_id=alterado_por_id,
-        observacao=observacao,
-        timestamp=datetime.now()
-    )
-    session.add(log)
-
-
 def _validar_itens_pedido(itens_data: List[PedidoItemCreate], session: Session) -> List[dict]:
     """Valida se produtos/combos existem e retorna lista com preco_unitario e id."""
     itens_validados = []
@@ -122,6 +110,19 @@ def _is_funcionario(user: Union[Cliente, Funcionario]) -> bool:
     return isinstance(user, Funcionario)
 
 
+def _criar_status_log(comanda_id: int, status_anterior: str, status_novo: str, alterado_por_tipo: str, alterado_por_id: int, observacao: str, session: Session) -> None:
+    log = StatusComandaLog(
+        id_comanda=comanda_id,
+        status_anterior=status_anterior,
+        status_novo=status_novo,
+        alterado_por_tipo=alterado_por_tipo,
+        alterado_por_id=alterado_por_id,
+        observacao=observacao,
+        timestamp=datetime.now()
+    )
+    session.add(log)
+
+
 def _validar_cliente_mesa_garcom(comanda_data: ComandaCreate, session: Session) -> None:
     if comanda_data.id_cliente:
         cliente = session.get(Cliente, comanda_data.id_cliente)
@@ -154,6 +155,7 @@ def _validar_promocao(comanda_data: ComandaCreate, session: Session) -> None:
 @router.post('/', response_model=ComandaResponse, status_code=HTTPStatus.CREATED)
 def criar_comanda(
     comanda_data: ComandaCreate,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
@@ -187,7 +189,6 @@ def criar_comanda(
 
     _calcular_totais_comanda(nova_comanda)
 
-    # Log de criação usando o current_user
     if isinstance(current_user, Funcionario):
         alterado_por_tipo = "funcionario"
         alterado_por_id = current_user.id
@@ -198,7 +199,6 @@ def criar_comanda(
         nova_comanda.id, None, nova_comanda.status_comanda,
         alterado_por_tipo, alterado_por_id, "Comanda criada", session
     )
-
     session.commit()
     session.refresh(nova_comanda)
 
@@ -215,6 +215,17 @@ def criar_comanda(
             selectinload(Comanda.status_logs)
         )
     )
+    log_audit(
+        session=session,
+        current_user=current_user,
+        acao='comanda_create',
+        tabela_afetada='comanda',
+        registro_id=nova_comanda.id,
+        dados_novos={'id': nova_comanda.id, 'cliente_id': nova_comanda.id_cliente, 'mesa_id': nova_comanda.id_mesa, 'total': nova_comanda.valor_a_pagar},
+        request=request
+    )
+    session.commit()
+
     return result
 
 
@@ -307,6 +318,7 @@ def obter_comanda(
 def atualizar_comanda(
     comanda_id: int,
     dados: ComandaUpdate,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
@@ -314,6 +326,8 @@ def atualizar_comanda(
     if not _is_funcionario(current_user):
         raise HTTPException(HTTPStatus.FORBIDDEN, "Apenas funcionários podem atualizar dados da comanda.")
     comanda = _obter_comanda(comanda_id, session)
+    dados_anteriores = ComandaResponse.model_validate(comanda).model_dump(mode='json')
+
     for campo, valor in dados.model_dump(exclude_unset=True).items():
         setattr(comanda, campo, valor)
     # Se alterar taxa_entrega ou desconto, recalcula valor_a_pagar
@@ -321,12 +335,24 @@ def atualizar_comanda(
     session.add(comanda)
     session.commit()
     session.refresh(comanda)
+    log_audit(
+        session=session,
+        current_user=current_user,
+        acao='comanda_update',
+        tabela_afetada='comanda',
+        registro_id=comanda.id,
+        dados_anteriores=dados_anteriores,
+        dados_novos=ComandaResponse.model_validate(comanda).model_dump(mode='json'),
+        request=request
+    )
+    session.commit()
     return comanda
 
 
 @router.delete('/{comanda_id}', response_model=MessageResponse)
 def deletar_comanda(
     comanda_id: int,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
@@ -340,9 +366,23 @@ def deletar_comanda(
     if comanda.status_comanda not in ['aberta', 'cancelada']:
         raise HTTPException(HTTPStatus.BAD_REQUEST,
             "Comanda já em preparo ou finalizada; não pode ser excluída.")
+
+    dados_anteriores = ComandaResponse.model_validate(comanda).model_dump(mode='json')
+
     session.query(PedidoItem).filter(PedidoItem.id_comanda == comanda_id).delete()
     session.delete(comanda)
     session.commit()
+    log_audit(
+        session=session,
+        current_user=current_user,
+        acao='comanda_delete',
+        tabela_afetada='comanda',
+        registro_id=comanda_id,
+        dados_anteriores=dados_anteriores,
+        request=request
+    )
+    session.commit()
+
     return MessageResponse(message="Comanda removida.", success=True)
 
 
@@ -351,6 +391,7 @@ def deletar_comanda(
 def adicionar_item_comanda(
     comanda_id: int,
     item_data: PedidoItemCreateSemComanda,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
@@ -396,6 +437,16 @@ def adicionar_item_comanda(
     _calcular_totais_comanda(comanda)
     session.commit()
     session.refresh(novo_item)
+    log_audit(
+        session=session,
+        current_user=current_user,
+        acao='comanda_item_add',
+        tabela_afetada='pedido_item',
+        registro_id=novo_item.id,
+        dados_novos={'id_produto': novo_item.id_produto, 'id_combo': novo_item.id_combo, 'quantidade': novo_item.quantidade, 'preco_unitario': novo_item.preco_unitario},
+        request=request
+    )
+    session.commit()
     return novo_item
 
 
@@ -403,6 +454,7 @@ def adicionar_item_comanda(
 def atualizar_item_comanda(
     item_id: int,
     dados: PedidoItemUpdate,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
@@ -422,6 +474,8 @@ def atualizar_item_comanda(
         raise HTTPException(HTTPStatus.BAD_REQUEST,
             "Comanda já em preparo ou finalizada, não pode alterar itens.")
 
+    dados_anteriores = PedidoItemResponse.model_validate(item).model_dump()
+
     if dados.quantidade is not None:
         item.quantidade = dados.quantidade
         item.subtotal = item.preco_unitario * dados.quantidade
@@ -432,12 +486,26 @@ def atualizar_item_comanda(
     _calcular_totais_comanda(comanda)   # Recalcula totais da comanda
     session.commit()
     session.refresh(item)
+
+    log_audit(
+        session=session,
+        current_user=current_user,
+        acao='comanda_item_update',
+        tabela_afetada='pedido_item',
+        registro_id=item.id,
+        dados_anteriores=dados_anteriores,
+        dados_novos=PedidoItemResponse.model_validate(item).model_dump(mode='json'),
+        request=request
+    )
+    session.commit()
+
     return item
 
 
 @router.delete('/itens/{item_id}', response_model=MessageResponse)
 def remover_item_comanda(
     item_id: int,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
@@ -454,11 +522,25 @@ def remover_item_comanda(
     if comanda.status_comanda not in ['aberta']:
         raise HTTPException(HTTPStatus.BAD_REQUEST,
             "Comanda já em preparo ou finalizada, não pode remover itens.")
+
+    dados_anteriores = PedidoItemResponse.model_validate(item).model_dump()
+
     session.delete(item)
     if item in comanda.pedido_itens:
         comanda.pedido_itens.remove(item)
     _calcular_totais_comanda(comanda)
     session.commit()
+    log_audit(
+        session=session,
+        current_user=current_user,
+        acao='comanda_item_remove',
+        tabela_afetada='pedido_item',
+        registro_id=item_id,
+        dados_anteriores=dados_anteriores,
+        request=request
+    )
+    session.commit()
+
     return MessageResponse(message="Item removido da comanda.", success=True)
 
 
@@ -467,6 +549,7 @@ def remover_item_comanda(
 def atualizar_status_comanda(
     comanda_id: int,
     dados: StatusUpdateRequest,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
 ):
@@ -492,9 +575,7 @@ def atualizar_status_comanda(
         if not (status_anterior == 'aberta' and novo_status == 'cancelada'):
             raise HTTPException(HTTPStatus.FORBIDDEN,
                 "Cliente só pode cancelar uma comanda em aberto.")
-    # Funcionário pode fazer qualquer transição válida
 
-    # Aplica a mudança
     comanda.status_comanda = novo_status
     if novo_status == 'paga':
         comanda.status_pagamento = 'pago'
@@ -504,7 +585,6 @@ def atualizar_status_comanda(
 
     session.add(comanda)
 
-    # Determina tipo e ID do responsável
     if isinstance(current_user, Cliente):
         alterado_por_tipo = "cliente"
         alterado_por_id = current_user.id
@@ -512,9 +592,21 @@ def atualizar_status_comanda(
         alterado_por_tipo = "funcionario"
         alterado_por_id = current_user.id
 
+    # Log de status (histórico)
     _criar_status_log(
         comanda_id, status_anterior, novo_status,
         alterado_por_tipo, alterado_por_id, dados.observacao, session
+    )
+
+    log_audit(
+        session=session,
+        current_user=current_user,
+        acao='comanda_status_change',
+        tabela_afetada='comanda',
+        registro_id=comanda.id,
+        dados_anteriores={'status_comanda': status_anterior},
+        dados_novos={'status_comanda': novo_status},
+        request=request
     )
     session.commit()
     session.refresh(comanda)

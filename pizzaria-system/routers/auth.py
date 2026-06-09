@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from pizzaria_system.database import get_session
-from pizzaria_system.email_utils import send_email
+from pizzaria_system.email_utils import send_reset_password_email
 from pizzaria_system.models import Cliente, Funcionario, PasswordResetToken
 from pizzaria_system.schemas import (
     ForgotPasswordRequest,
@@ -97,12 +97,10 @@ def forgot_password(
     session.add(token)
     session.commit()
 
-    send_email(
+    send_reset_password_email(
         to_email=email,
-        subject="Redefinição de Senha - Forno di Resistenza",
-        body=f"Seu código de redefinição de senha é: {code}\n\n"
-             f"O código expira em {TOKEN_TTL_MINUTES} minutos.\n\n"
-             f"Se você não solicitou esta redefinição, ignore este e-mail.",
+        code=code,
+        ttl_minutes=TOKEN_TTL_MINUTES,
     )
 
     return ForgotPasswordResponse(

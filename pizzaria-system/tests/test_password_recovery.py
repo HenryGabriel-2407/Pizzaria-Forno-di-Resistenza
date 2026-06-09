@@ -4,7 +4,8 @@ from unittest.mock import patch
 from pizzaria_system.models import PasswordResetToken
 from pizzaria_system.security import verify_password_hash
 
-SEND_EMAIL_PATH = "routers.auth.send_email"
+# Caminho correto da função usada no router
+SEND_EMAIL_PATH = "routers.auth.send_reset_password_email"
 
 
 # ---------- Testes de Forgot Password ----------
@@ -26,8 +27,13 @@ class TestForgotPassword:
         data = response.json()
         assert data["token_ttl_minutes"] == 30
         mock.assert_called_once()
-        assert mock.call_args[1]["to_email"] == cliente_comum.email
-        assert "código" in mock.call_args[1]["body"]
+        # A função é chamada com argumentos nomeados
+        kwargs = mock.call_args[1]
+        assert kwargs["to_email"] == cliente_comum.email
+        assert "code" in kwargs
+        assert isinstance(kwargs["code"], str)
+        assert len(kwargs["code"]) == 6
+        assert kwargs["ttl_minutes"] == 30
 
     def test_funcionario_recebe_token(self, client, admin_user):
         with patch(SEND_EMAIL_PATH, return_value=True) as mock:
@@ -37,6 +43,8 @@ class TestForgotPassword:
         assert response.status_code == HTTPStatus.OK
         assert response.json()["token_ttl_minutes"] == 30
         mock.assert_called_once()
+        kwargs = mock.call_args[1]
+        assert kwargs["to_email"] == admin_user.email
 
     def test_token_salvo_no_banco(self, client, cliente_comum, db_session):
         with patch(SEND_EMAIL_PATH, return_value=True):
@@ -57,12 +65,8 @@ class TestForgotPassword:
             client.post("/auth/forgot-password", json={
                 "email": cliente_comum.email,
             })
-        call_body = mock.call_args[1]["body"]
-        raw_code = None
-        for word in call_body.split():
-            if word.isdigit() and len(word) == 6:
-                raw_code = word
-                break
+        kwargs = mock.call_args[1]
+        raw_code = kwargs["code"]
         assert raw_code is not None
         token = db_session.query(PasswordResetToken).filter_by(
             email=cliente_comum.email, used=False
@@ -76,11 +80,8 @@ class TestResetPassword:
     def _get_valid_code(self, client, email):
         with patch(SEND_EMAIL_PATH, return_value=True) as mock:
             client.post("/auth/forgot-password", json={"email": email})
-        call_body = mock.call_args[1]["body"]
-        for word in call_body.split():
-            if word.isdigit() and len(word) == 6:
-                return word
-        return None
+        kwargs = mock.call_args[1]
+        return kwargs["code"]
 
     def test_reset_com_token_valido_cliente(self, client, cliente_comum, db_session):
         code = self._get_valid_code(client, cliente_comum.email)

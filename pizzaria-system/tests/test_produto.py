@@ -1,9 +1,7 @@
 from http import HTTPStatus
 
 import pytest
-from sqlalchemy.orm import Session
 
-from pizzaria_system.database import engine
 from pizzaria_system.models import Combo, ComboProduto, Produto
 
 
@@ -173,16 +171,14 @@ def test_deletar_produto_sem_autenticacao(client, sample_produto):
     assert response.status_code == HTTPStatus.UNAUTHORIZED
 
 
-def test_deletar_produto_sem_combo(client, admin_headers, sample_produto):
+def test_deletar_produto_sem_combo(client, admin_headers, sample_produto, db_session):
     produto_id = sample_produto.id
-
     response = client.delete(f"/produtos/{produto_id}", headers=admin_headers)
     assert response.status_code == HTTPStatus.OK
 
-    # Criar uma nova sessão para verificar
-    with Session(engine) as session:
-        produto = session.get(Produto, produto_id)
-        assert produto is None
+    db_session.expire_all()
+    produto = db_session.get(Produto, produto_id)
+    assert produto is None
 
 
 def test_deletar_produto_com_combo(client, admin_headers, sample_produto, db_session):

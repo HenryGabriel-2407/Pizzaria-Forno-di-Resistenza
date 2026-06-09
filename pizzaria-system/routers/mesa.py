@@ -1,14 +1,14 @@
-# routers/mesa.py
 from http import HTTPStatus
-from typing import List
+from typing import List, Union
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from pizzaria_system.database import get_session
-from pizzaria_system.models import Comanda, Mesa
+from pizzaria_system.models import Cliente, Comanda, Funcionario, Mesa
 from pizzaria_system.schemas import MesaCreate, MesaResponse, MesaUpdate, MessageResponse
+from pizzaria_system.security import get_current_user
 from pizzaria_system.settings import Settings
 
 router = APIRouter(prefix='/mesas', tags=['mesas'])
@@ -49,29 +49,12 @@ def _verificar_codigo_qr_existente(codigo_qr: str, session: Session, exclude_id:
         )
 
 
-# ---------- CRUD MESA ----------
-@router.post('/', response_model=MesaResponse, status_code=HTTPStatus.CREATED)
-def criar_mesa(
-    mesa_data: MesaCreate,
-    session: Session = Depends(get_session)
-):
-    _verificar_numero_existente(mesa_data.numero, session)
-
-    # Cria a mesa sem o codigo_qr
-    nova_mesa = Mesa(**mesa_data.model_dump())
-    session.add(nova_mesa)
-    session.flush()  # Gera o ID
-
-    # Gera a string do QR code (URL base + ID da mesa)
-    settings = Settings()
-    qr_string = f"{settings.BASE_URL}/mesa/{nova_mesa.id}"
-    nova_mesa.codigo_qr = qr_string
-
-    session.commit()
-    session.refresh(nova_mesa)
-    return nova_mesa
+def _is_funcionario(user: Union[Cliente, Funcionario]) -> bool:
+    """Verifica se o usuário é um funcionário (qualquer cargo)."""
+    return isinstance(user, Funcionario)
 
 
+# ---------- ENDPOINTS PÚBLICOS (leitura) ----------
 @router.get('/', response_model=List[MesaResponse])
 def listar_mesas(
     session: Session = Depends(get_session),
@@ -105,25 +88,58 @@ def obter_mesa(
     return mesa
 
 
+# ---------- ENDPOINTS PROTEGIDOS (apenas funcionários) ----------
+@router.post('/', response_model=MesaResponse, status_code=HTTPStatus.CREATED)
+def criar_mesa(
+    mesa_data: MesaCreate,
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
+):
+    """Cria uma nova mesa. Apenas funcionários podem criar."""
+    if not _is_funcionario(current_user):
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail="Apenas funcionários podem criar mesas."
+        )
+
+    _verificar_numero_existente(mesa_data.numero, session)
+
+    nova_mesa = Mesa(**mesa_data.model_dump())
+    session.add(nova_mesa)
+    session.flush()
+
+    settings = Settings()
+    qr_string = f"{settings.BASE_URL}/mesa/{nova_mesa.id}"
+    nova_mesa.codigo_qr = qr_string
+
+    session.commit()
+    session.refresh(nova_mesa)
+    return nova_mesa
+
+
 @router.put('/{mesa_id}', response_model=MesaResponse)
 def atualizar_mesa(
     mesa_id: int,
     dados: MesaUpdate,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
 ):
     """
-    Atualiza os dados de uma mesa (número, lugares, status, código QR).
-    - Verifica unicidade do número e do QR code, se alterados.
+    Atualiza os dados de uma mesa. Apenas funcionários.
     """
+    if not _is_funcionario(current_user):
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail="Apenas funcionários podem alterar mesas."
+        )
+
     mesa = _obter_mesa_por_id(mesa_id, session)
 
-    # Validações de unicidade apenas se os campos foram enviados
     if dados.numero is not None:
         _verificar_numero_existente(dados.numero, session, mesa_id)
     if dados.codigo_qr is not None:
         _verificar_codigo_qr_existente(dados.codigo_qr, session, mesa_id)
 
-    # Aplica apenas campos enviados
     for campo, valor in dados.model_dump(exclude_unset=True).items():
         setattr(mesa, campo, valor)
 
@@ -136,15 +152,20 @@ def atualizar_mesa(
 @router.delete('/{mesa_id}', response_model=MessageResponse)
 def deletar_mesa(
     mesa_id: int,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
 ):
     """
-    Remove uma mesa do sistema.
-    - Impede exclusão se houver comandas associadas (histórico de pedidos).
+    Remove uma mesa do sistema. Apenas funcionários.
     """
+    if not _is_funcionario(current_user):
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail="Apenas funcionários podem remover mesas."
+        )
+
     mesa = _obter_mesa_por_id(mesa_id, session)
 
-    # Verifica se existem comandas associadas (mesmo que fechadas, mantém histórico)
     comandas_associadas = session.scalar(
         select(Comanda).where(Comanda.id_mesa == mesa_id).limit(1)
     )
@@ -162,13 +183,20 @@ def deletar_mesa(
     )
 
 
-# ---------- ENDPOINTS DE CONTROLE DE STATUS ----------
+# ---------- ENDPOINTS DE CONTROLE DE STATUS (apenas funcionários) ----------
 @router.post('/{mesa_id}/ocupar', response_model=MesaResponse)
 def ocupar_mesa(
     mesa_id: int,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
 ):
-    """Altera o status da mesa para 'ocupada'."""
+    """Altera o status da mesa para 'ocupada'. Apenas funcionários."""
+    if not _is_funcionario(current_user):
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail="Apenas funcionários podem alterar o status da mesa."
+        )
+
     mesa = _obter_mesa_por_id(mesa_id, session)
     if mesa.status == 'ocupada':
         raise HTTPException(
@@ -185,9 +213,16 @@ def ocupar_mesa(
 @router.post('/{mesa_id}/liberar', response_model=MesaResponse)
 def liberar_mesa(
     mesa_id: int,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
 ):
-    """Altera o status da mesa para 'livre'."""
+    """Altera o status da mesa para 'livre'. Apenas funcionários."""
+    if not _is_funcionario(current_user):
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail="Apenas funcionários podem alterar o status da mesa."
+        )
+
     mesa = _obter_mesa_por_id(mesa_id, session)
     if mesa.status == 'livre':
         raise HTTPException(
@@ -204,9 +239,16 @@ def liberar_mesa(
 @router.post('/{mesa_id}/reservar', response_model=MesaResponse)
 def reservar_mesa(
     mesa_id: int,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
 ):
-    """Altera o status da mesa para 'reservada'."""
+    """Altera o status da mesa para 'reservada'. Apenas funcionários."""
+    if not _is_funcionario(current_user):
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail="Apenas funcionários podem alterar o status da mesa."
+        )
+
     mesa = _obter_mesa_por_id(mesa_id, session)
     if mesa.status == 'reservada':
         raise HTTPException(

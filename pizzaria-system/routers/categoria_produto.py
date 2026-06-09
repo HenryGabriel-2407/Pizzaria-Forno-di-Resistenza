@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import List
+from typing import List, Union
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -7,13 +7,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from pizzaria_system.database import get_session
-from pizzaria_system.models import CategoriaProduto
+from pizzaria_system.models import CategoriaProduto, Cliente, Funcionario
 from pizzaria_system.schemas import (
     CategoriaProdutoCreate,
     CategoriaProdutoResponse,
     CategoriaProdutoUpdate,
     MessageResponse,
 )
+from pizzaria_system.security import get_current_user
 
 router = APIRouter(prefix='/categorias', tags=['categorias'])
 
@@ -29,12 +30,45 @@ def _verificar_categoria_existente(categoria_id: int, session: Session) -> Categ
     return categoria
 
 
-# ---------- CRUD ----------
+def _is_admin(user: Union[Cliente, Funcionario]) -> bool:
+    """Verifica se o usuário é um funcionário com cargo 'admin'."""
+    return isinstance(user, Funcionario) and user.cargo == 'admin'
+
+
+# ---------- ENDPOINTS PÚBLICOS (apenas leitura) ----------
+@router.get('/', response_model=List[CategoriaProdutoResponse])
+def listar_categorias(
+    session: Session = Depends(get_session)
+):
+    """Lista todas as categorias (público)."""
+    categorias = session.scalars(select(CategoriaProduto)).all()
+    return categorias
+
+
+@router.get('/{categoria_id}', response_model=CategoriaProdutoResponse)
+def obter_categoria(
+    categoria_id: int,
+    session: Session = Depends(get_session)
+):
+    """Retorna uma categoria específica pelo ID (público)."""
+    categoria = _verificar_categoria_existente(categoria_id, session)
+    return categoria
+
+
+# ---------- ENDPOINTS PROTEGIDOS (apenas admin) ----------
 @router.post('/', response_model=CategoriaProdutoResponse, status_code=HTTPStatus.CREATED)
 def criar_categoria(
     categoria_data: CategoriaProdutoCreate,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
 ):
+    """Cria uma nova categoria. Apenas administradores."""
+    if not _is_admin(current_user):
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail="Apenas administradores podem criar categorias."
+        )
+
     try:
         nova_categoria = CategoriaProduto(**categoria_data.model_dump())
         session.add(nova_categoria)
@@ -49,34 +83,22 @@ def criar_categoria(
         )
 
 
-@router.get('/', response_model=List[CategoriaProdutoResponse])
-def listar_categorias(
-    session: Session = Depends(get_session)
-):
-    """Lista todas as categorias."""
-    categorias = session.scalars(select(CategoriaProduto)).all()
-    return categorias
-
-
-@router.get('/{categoria_id}', response_model=CategoriaProdutoResponse)
-def obter_categoria(
-    categoria_id: int,
-    session: Session = Depends(get_session)
-):
-    """Retorna uma categoria específica pelo ID."""
-    categoria = _verificar_categoria_existente(categoria_id, session)
-    return categoria
-
-
 @router.put('/{categoria_id}', response_model=CategoriaProdutoResponse)
 def atualizar_categoria(
     categoria_id: int,
     dados: CategoriaProdutoUpdate,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
 ):
+    """Atualiza uma categoria. Apenas administradores."""
+    if not _is_admin(current_user):
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail="Apenas administradores podem alterar categorias."
+        )
+
     categoria = _verificar_categoria_existente(categoria_id, session)
 
-    # Se o nome não está sendo alterado, não há risco de duplicidade
     if dados.nome is not None and dados.nome != categoria.nome:
         try:
             for campo, valor in dados.model_dump(exclude_unset=True).items():
@@ -90,7 +112,6 @@ def atualizar_categoria(
                 detail=f"Já existe outra categoria com o nome '{dados.nome}'."
             )
     else:
-        # Atualização sem mudar o nome
         for campo, valor in dados.model_dump(exclude_unset=True).items():
             setattr(categoria, campo, valor)
         session.commit()
@@ -102,16 +123,18 @@ def atualizar_categoria(
 @router.delete('/{categoria_id}', response_model=MessageResponse)
 def deletar_categoria(
     categoria_id: int,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
 ):
-    """
-    Remove uma categoria.
-    ATENÇÃO: Verifique se não há produtos vinculados antes de excluir.
-    (Você pode adicionar uma checagem consultando Produto.id_categoria)
-    """
+    """Remove uma categoria. Apenas administradores."""
+    if not _is_admin(current_user):
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail="Apenas administradores podem remover categorias."
+        )
+
     categoria = _verificar_categoria_existente(categoria_id, session)
 
-    # Verificar se existem produtos usando esta categoria
     from pizzaria_system.models import Produto
     produtos_associados = session.scalar(
         select(Produto).where(Produto.id_categoria == categoria_id).limit(1)

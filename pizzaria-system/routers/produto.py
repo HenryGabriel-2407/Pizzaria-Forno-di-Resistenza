@@ -2,10 +2,11 @@
 from http import HTTPStatus
 from typing import List, Union
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
+from pizzaria_system.audit import log_audit
 from pizzaria_system.database import get_session
 from pizzaria_system.models import CategoriaProduto, Cliente, ComboProduto, Funcionario, Produto
 from pizzaria_system.schemas import MessageResponse, ProdutoCreate, ProdutoResponse, ProdutoUpdate
@@ -45,6 +46,7 @@ def _is_admin(user: Union[Cliente, Funcionario]) -> bool:
 @router.post('/', response_model=ProdutoResponse, status_code=HTTPStatus.CREATED, summary="Criar novo produto")
 def criar_produto(
     produto_data: ProdutoCreate,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
 ):
@@ -66,7 +68,19 @@ def criar_produto(
     session.add(novo_produto)
     session.commit()
     session.refresh(novo_produto)
+    dados_novos = ProdutoResponse.model_validate(novo_produto).model_dump()
 
+    # Auditoria
+    log_audit(
+        session=session,
+        current_user=current_user,
+        acao='produto_create',
+        tabela_afetada='produto',
+        registro_id=novo_produto.id,
+        dados_novos=dados_novos,
+        request=request
+    )
+    session.commit()
     return novo_produto
 
 
@@ -114,6 +128,7 @@ def obter_produto(
 def atualizar_produto(
     produto_id: int,
     dados: ProdutoUpdate,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
 ):
@@ -134,6 +149,8 @@ def atualizar_produto(
     if dados.id_categoria is not None:
         _verificar_categoria_existente(dados.id_categoria, session)
 
+    dados_anteriores = ProdutoResponse.model_validate(produto).model_dump()
+
     for campo, valor in dados.model_dump(exclude_unset=True).items():
         setattr(produto, campo, valor)
 
@@ -141,12 +158,26 @@ def atualizar_produto(
     session.commit()
     session.refresh(produto)
 
+    dados_novos = ProdutoResponse.model_validate(produto).model_dump()
+
+    log_audit(
+        session=session,
+        current_user=current_user,
+        acao='produto_update',
+        tabela_afetada='produto',
+        registro_id=produto.id,
+        dados_anteriores=dados_anteriores,
+        dados_novos=dados_novos,
+        request=request
+    )
+    session.commit()
     return produto
 
 
 @router.delete('/{produto_id}', response_model=MessageResponse, summary="Remover produto")
 def deletar_produto(
     produto_id: int,
+    request: Request,
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
 ):
@@ -172,8 +203,19 @@ def deletar_produto(
             detail="Este produto está vinculado a um ou mais combos. "
                    "Remova-o dos combos antes de excluí-lo."
         )
-
+    dados_anteriores = ProdutoResponse.model_validate(produto).model_dump()
     session.delete(produto)
+    session.flush()
+    session.commit()
+    log_audit(
+        session=session,
+        current_user=current_user,
+        acao='produto_delete',
+        tabela_afetada='produto',
+        registro_id=produto_id,
+        dados_anteriores=dados_anteriores,
+        request=request
+    )
     session.commit()
     return MessageResponse(
         message=f"Produto '{produto.nome}' removido com sucesso.",

@@ -4,21 +4,19 @@ from http import HTTPStatus
 
 import pytest
 
-from pizzaria_system.models import Cliente, Comanda, Mesa, MetodoPagamento
+from pizzaria_system.models import Cliente, Comanda, Mesa, MetodoPagamento, PedidoItem
 
 
 # Fixture de limpeza automática
 @pytest.fixture(autouse=True)
 def clean_metodo_pagamento_table(db_session):
     """Remove todos os métodos de pagamento após cada teste, tratando rollback."""
-    # Reseta a sessão para evitar PendingRollbackError
     try:
         db_session.rollback()
     except Exception:
         pass
     yield
-    # Limpeza segura: primeiro remove dependências (comandas, itens) se houver
-    from pizzaria_system.models import Comanda, PedidoItem
+    # Limpeza segura: primeiro remove dependências (comandas, itens)
     db_session.query(PedidoItem).delete()
     db_session.query(Comanda).delete()
     db_session.query(MetodoPagamento).delete()
@@ -27,9 +25,13 @@ def clean_metodo_pagamento_table(db_session):
 
 # ---------- Fixtures auxiliares ----------
 @pytest.fixture
-def metodo_pagamento_criado(client) -> dict:
-    """Cria e retorna um método de pagamento para uso nos testes."""
-    response = client.post("/metodos-pagamento/", json={"nome": "PIX", "ativo": True})
+def metodo_pagamento_criado(client, admin_headers) -> dict:
+    """Cria e retorna um método de pagamento para uso nos testes (requer admin)."""
+    response = client.post(
+        "/metodos-pagamento/",
+        headers=admin_headers,
+        json={"nome": "PIX", "ativo": True}
+    )
     assert response.status_code == HTTPStatus.CREATED
     return response.json()
 
@@ -39,60 +41,82 @@ def metodo_id(metodo_pagamento_criado) -> int:
     return metodo_pagamento_criado["id"]
 
 
-# ========== Testes de Criação ==========
-def test_criar_metodo_pagamento_sucesso(client):
+# ========== Testes de Criação (requer autenticação) ==========
+def test_criar_metodo_pagamento_sucesso(client, admin_headers):
     nome_unico = f"Metodo_{uuid.uuid4().hex[:8]}"
-    response = client.post("/metodos-pagamento/", json={"nome": nome_unico, "ativo": True})
+    response = client.post(
+        "/metodos-pagamento/",
+        headers=admin_headers,
+        json={"nome": nome_unico, "ativo": True}
+    )
     assert response.status_code == HTTPStatus.CREATED
     data = response.json()
     assert data["nome"] == nome_unico
     assert data["ativo"] is True
 
 
-def test_criar_metodo_pagamento_sem_ativo(client):
+def test_criar_metodo_pagamento_sem_autenticacao(client):
+    response = client.post("/metodos-pagamento/", json={"nome": "SemAuth"})
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+
+
+def test_criar_metodo_pagamento_com_cliente(client, cliente_headers):
+    response = client.post(
+        "/metodos-pagamento/",
+        headers=cliente_headers,
+        json={"nome": "ClienteTenta"}
+    )
+    assert response.status_code == HTTPStatus.FORBIDDEN
+
+
+def test_criar_metodo_pagamento_sem_ativo(client, admin_headers):
     """Deve criar com ativo=True por padrão."""
-    response = client.post("/metodos-pagamento/", json={"nome": "Cartão"})
+    response = client.post(
+        "/metodos-pagamento/",
+        headers=admin_headers,
+        json={"nome": "Cartão"}
+    )
     assert response.status_code == HTTPStatus.CREATED
     assert response.json()["ativo"] is True
 
 
-def test_criar_metodo_pagamento_nome_duplicado(client):
-    client.post("/metodos-pagamento/", json={"nome": "PIX"})
-    response = client.post("/metodos-pagamento/", json={"nome": "PIX"})
+def test_criar_metodo_pagamento_nome_duplicado(client, admin_headers):
+    client.post("/metodos-pagamento/", headers=admin_headers, json={"nome": "PIX_dup"})
+    response = client.post("/metodos-pagamento/", headers=admin_headers, json={"nome": "PIX_dup"})
     assert response.status_code == HTTPStatus.BAD_REQUEST
-    assert "duplicate" in response.text.lower() or "Já existe" in response.text
+    assert "já existe" in response.text.lower()
 
 
-# ========== Testes de Leitura ==========
-def test_listar_metodos_pagamento(client):
-    # Cria um segundo método
-    client.post("/metodos-pagamento/", json={"nome": "PIX"})
-    client.post("/metodos-pagamento/", json={"nome": "Cartão"})
+# ========== Testes de Leitura (públicos) ==========
+def test_listar_metodos_pagamento(client, admin_headers):
+    # Cria métodos via admin
+    client.post("/metodos-pagamento/", headers=admin_headers, json={"nome": "PIX_lista"})
+    client.post("/metodos-pagamento/", headers=admin_headers, json={"nome": "Cartão_lista"})
     response = client.get("/metodos-pagamento/")
     assert response.status_code == HTTPStatus.OK
     data = response.json()
     assert len(data) >= 2
     nomes = [m["nome"] for m in data]
-    assert "PIX" in nomes
-    assert "Cartão" in nomes
+    assert "PIX_lista" in nomes
+    assert "Cartão_lista" in nomes
 
 
-def test_listar_metodos_pagamento_filtrando_por_ativo(client):
-    client.post("/metodos-pagamento/", json={"nome": "Dinheiro", "ativo": True})
-    client.post("/metodos-pagamento/", json={"nome": "Cheque", "ativo": False})
+def test_listar_metodos_pagamento_filtrando_por_ativo(client, admin_headers):
+    client.post("/metodos-pagamento/", headers=admin_headers, json={"nome": "Dinheiro_filtro", "ativo": True})
+    client.post("/metodos-pagamento/", headers=admin_headers, json={"nome": "Cheque_filtro", "ativo": False})
 
     response = client.get("/metodos-pagamento/?ativo=true")
     assert response.status_code == HTTPStatus.OK
     data = response.json()
     assert all(m["ativo"] is True for m in data)
     assert len(data) == 1
-    assert data[0]["nome"] == "Dinheiro"
+    assert data[0]["nome"] == "Dinheiro_filtro"
 
     response = client.get("/metodos-pagamento/?ativo=false")
     data = response.json()
     assert all(m["ativo"] is False for m in data)
     assert len(data) == 1
-    assert data[0]["nome"] == "Cheque"
+    assert data[0]["nome"] == "Cheque_filtro"
 
 
 def test_obter_metodo_pagamento_por_id(client, metodo_id):
@@ -108,10 +132,11 @@ def test_obter_metodo_pagamento_inexistente(client):
     assert response.status_code == HTTPStatus.NOT_FOUND
 
 
-# ========== Testes de Atualização ==========
-def test_atualizar_metodo_pagamento_completo(client, metodo_id):
+# ========== Testes de Atualização (requer autenticação) ==========
+def test_atualizar_metodo_pagamento_completo(client, admin_headers, metodo_id):
     response = client.put(
         f"/metodos-pagamento/{metodo_id}",
+        headers=admin_headers,
         json={"nome": "PIX Atualizado", "ativo": False}
     )
     assert response.status_code == HTTPStatus.OK
@@ -120,9 +145,24 @@ def test_atualizar_metodo_pagamento_completo(client, metodo_id):
     assert data["ativo"] is False
 
 
-def test_atualizar_metodo_pagamento_parcial(client, metodo_id):
+def test_atualizar_metodo_pagamento_sem_autenticacao(client, metodo_id):
+    response = client.put(f"/metodos-pagamento/{metodo_id}", json={"ativo": False})
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+
+
+def test_atualizar_metodo_pagamento_com_cliente(client, cliente_headers, metodo_id):
     response = client.put(
         f"/metodos-pagamento/{metodo_id}",
+        headers=cliente_headers,
+        json={"ativo": False}
+    )
+    assert response.status_code == HTTPStatus.FORBIDDEN
+
+
+def test_atualizar_metodo_pagamento_parcial(client, admin_headers, metodo_id):
+    response = client.put(
+        f"/metodos-pagamento/{metodo_id}",
+        headers=admin_headers,
         json={"ativo": False}
     )
     assert response.status_code == HTTPStatus.OK
@@ -131,31 +171,44 @@ def test_atualizar_metodo_pagamento_parcial(client, metodo_id):
     assert data["ativo"] is False
 
 
-def test_atualizar_metodo_pagamento_nome_duplicado(client):
-    client.post("/metodos-pagamento/", json={"nome": "Vale"})
-    resp2 = client.post("/metodos-pagamento/", json={"nome": "Vale Refeição"})
+def test_atualizar_metodo_pagamento_nome_duplicado(client, admin_headers):
+    client.post("/metodos-pagamento/", headers=admin_headers, json={"nome": "Vale"})
+    resp2 = client.post("/metodos-pagamento/", headers=admin_headers, json={"nome": "Vale Refeição"})
     id2 = resp2.json()["id"]
-    response = client.put(f"/metodos-pagamento/{id2}", json={"nome": "Vale"})
+    response = client.put(
+        f"/metodos-pagamento/{id2}",
+        headers=admin_headers,
+        json={"nome": "Vale"}
+    )
     assert response.status_code == HTTPStatus.BAD_REQUEST
-    assert "duplicate" in response.text.lower() or "Já existe" in response.text
+    assert "já existe" in response.text.lower()
 
 
-def test_atualizar_metodo_pagamento_inexistente(client):
-    response = client.put("/metodos-pagamento/999", json={"nome": "Novo"})
+def test_atualizar_metodo_pagamento_inexistente(client, admin_headers):
+    response = client.put("/metodos-pagamento/999", headers=admin_headers, json={"nome": "Novo"})
     assert response.status_code == HTTPStatus.NOT_FOUND
 
 
-# ========== Testes de Exclusão ==========
-def test_deletar_metodo_pagamento_sem_comandas(client, metodo_id):
-    response = client.delete(f"/metodos-pagamento/{metodo_id}")
+# ========== Testes de Exclusão (requer autenticação) ==========
+def test_deletar_metodo_pagamento_sem_comandas(client, admin_headers, metodo_id):
+    response = client.delete(f"/metodos-pagamento/{metodo_id}", headers=admin_headers)
     assert response.status_code == HTTPStatus.OK
     assert response.json()["success"] is True
-    # Verifica que não existe mais
     get_resp = client.get(f"/metodos-pagamento/{metodo_id}")
     assert get_resp.status_code == HTTPStatus.NOT_FOUND
 
 
-def test_deletar_metodo_pagamento_com_comandas_associadas(client, db_session, metodo_id):
+def test_deletar_metodo_pagamento_sem_autenticacao(client, metodo_id):
+    response = client.delete(f"/metodos-pagamento/{metodo_id}")
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+
+
+def test_deletar_metodo_pagamento_com_cliente(client, cliente_headers, metodo_id):
+    response = client.delete(f"/metodos-pagamento/{metodo_id}", headers=cliente_headers)
+    assert response.status_code == HTTPStatus.FORBIDDEN
+
+
+def test_deletar_metodo_pagamento_com_comandas_associadas(client, admin_headers, db_session, metodo_id):
     # Usa dados únicos para evitar conflitos
     email_unico = f"teste_{uuid.uuid4().hex[:8]}@email.com"
     cliente = Cliente(
@@ -187,11 +240,9 @@ def test_deletar_metodo_pagamento_com_comandas_associadas(client, db_session, me
     db_session.add(comanda)
     db_session.commit()
 
-    # Tenta deletar o método de pagamento – deve falhar
-    response = client.delete(f"/metodos-pagamento/{metodo_id}")
+    response = client.delete(f"/metodos-pagamento/{metodo_id}", headers=admin_headers)
     assert response.status_code == HTTPStatus.BAD_REQUEST
     assert "vinculado" in response.text.lower() or "comandas" in response.text.lower()
 
-    # Verifica que o método ainda existe
     get_resp = client.get(f"/metodos-pagamento/{metodo_id}")
     assert get_resp.status_code == HTTPStatus.OK

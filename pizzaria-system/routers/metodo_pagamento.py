@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import List
+from typing import List, Union
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -7,13 +7,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from pizzaria_system.database import get_session
-from pizzaria_system.models import MetodoPagamento
+from pizzaria_system.models import Cliente, Funcionario, MetodoPagamento
 from pizzaria_system.schemas import (
     MessageResponse,
     MetodoPagamentoCreate,
     MetodoPagamentoResponse,
     MetodoPagamentoUpdate,
 )
+from pizzaria_system.security import get_current_user
 
 router = APIRouter(prefix='/metodos-pagamento', tags=['metodos_pagamento'])
 
@@ -29,27 +30,12 @@ def _verificar_metodo_existente(metodo_id: int, session: Session) -> MetodoPagam
     return metodo
 
 
-# ---------- CRUD ----------
-@router.post('/', response_model=MetodoPagamentoResponse, status_code=HTTPStatus.CREATED)
-def criar_metodo_pagamento(
-    metodo_data: MetodoPagamentoCreate,
-    session: Session = Depends(get_session)
-):
-    """Cria um novo método de pagamento (ex: PIX, Dinheiro, Cartão)."""
-    try:
-        novo_metodo = MetodoPagamento(**metodo_data.model_dump())
-        session.add(novo_metodo)
-        session.commit()
-        session.refresh(novo_metodo)
-        return novo_metodo
-    except IntegrityError:
-        session.rollback()
-        raise HTTPException(
-            status_code=HTTPStatus.BAD_REQUEST,
-            detail=f"Já existe um método de pagamento com o nome '{metodo_data.nome}'."
-        )
+def _is_funcionario(user: Union[Cliente, Funcionario]) -> bool:
+    """Verifica se o usuário é um funcionário (qualquer cargo)."""
+    return isinstance(user, Funcionario)
 
 
+# ---------- ENDPOINTS PÚBLICOS (leitura) ----------
 @router.get('/', response_model=List[MetodoPagamentoResponse])
 def listar_metodos_pagamento(
     session: Session = Depends(get_session),
@@ -73,15 +59,50 @@ def obter_metodo_pagamento(
     return metodo
 
 
+# ---------- ENDPOINTS PROTEGIDOS (apenas funcionários) ----------
+@router.post('/', response_model=MetodoPagamentoResponse, status_code=HTTPStatus.CREATED)
+def criar_metodo_pagamento(
+    metodo_data: MetodoPagamentoCreate,
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
+):
+    """Cria um novo método de pagamento. Apenas funcionários."""
+    if not _is_funcionario(current_user):
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail="Apenas funcionários podem criar métodos de pagamento."
+        )
+
+    try:
+        novo_metodo = MetodoPagamento(**metodo_data.model_dump())
+        session.add(novo_metodo)
+        session.commit()
+        session.refresh(novo_metodo)
+        return novo_metodo
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST,
+            detail=f"Já existe um método de pagamento com o nome '{metodo_data.nome}'."
+        )
+
+
 @router.put('/{metodo_id}', response_model=MetodoPagamentoResponse)
 def atualizar_metodo_pagamento(
     metodo_id: int,
     dados: MetodoPagamentoUpdate,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
 ):
+    """Atualiza um método de pagamento. Apenas funcionários."""
+    if not _is_funcionario(current_user):
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail="Apenas funcionários podem alterar métodos de pagamento."
+        )
+
     metodo = _verificar_metodo_existente(metodo_id, session)
 
-    # Só faz sentido verificar se o nome está sendo alterado
     if dados.nome is not None and dados.nome != metodo.nome:
         try:
             for campo, valor in dados.model_dump(exclude_unset=True).items():
@@ -96,7 +117,6 @@ def atualizar_metodo_pagamento(
                 detail=f"Já existe outro método de pagamento com o nome '{dados.nome}'."
             )
     else:
-        # Atualização sem mudar nome – não há risco de duplicidade
         for campo, valor in dados.model_dump(exclude_unset=True).items():
             setattr(metodo, campo, valor)
         session.commit()
@@ -107,15 +127,18 @@ def atualizar_metodo_pagamento(
 @router.delete('/{metodo_id}', response_model=MessageResponse)
 def deletar_metodo_pagamento(
     metodo_id: int,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
 ):
-    """
-    Remove um método de pagamento.
-    ATENÇÃO: Verifique se não há comandas usando este método antes de excluir.
-    """
+    """Remove um método de pagamento. Apenas funcionários."""
+    if not _is_funcionario(current_user):
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail="Apenas funcionários podem remover métodos de pagamento."
+        )
+
     metodo = _verificar_metodo_existente(metodo_id, session)
 
-    # Verificar se existe alguma comanda vinculada
     from pizzaria_system.models import Comanda
     comanda_associada = session.scalar(
         select(Comanda).where(Comanda.id_metodo_pagamento == metodo_id).limit(1)

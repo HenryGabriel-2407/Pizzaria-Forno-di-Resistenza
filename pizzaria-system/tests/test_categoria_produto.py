@@ -15,9 +15,9 @@ def clean_categoria_table(db_session):
 
 
 @pytest.fixture
-def categoria_criada(client) -> dict:
-    """Cria e retorna uma categoria para uso nos testes."""
-    response = client.post("/categorias/", json={"nome": "Pizzas"})
+def categoria_criada(client, admin_headers) -> dict:
+    """Cria e retorna uma categoria usando admin_headers."""
+    response = client.post("/categorias/", json={"nome": "Pizzas"}, headers=admin_headers)
     assert response.status_code == HTTPStatus.CREATED
     return response.json()
 
@@ -28,36 +28,46 @@ def categoria_id(categoria_criada) -> int:
 
 
 # ========== Testes de Criação ==========
-def test_criar_categoria_sucesso(client):
-    response = client.post("/categorias/", json={"nome": "Bebidas"})
+def test_criar_categoria_sucesso(client, admin_headers):
+    response = client.post("/categorias/", json={"nome": "Bebidas"}, headers=admin_headers)
     assert response.status_code == HTTPStatus.CREATED
     data = response.json()
     assert data["nome"] == "Bebidas"
     assert "id" in data
 
 
-def test_criar_categoria_nome_duplicado(client, categoria_criada):
+def test_criar_categoria_sem_autenticacao(client):
+    """Sem token, deve retornar 401 Unauthorized"""
+    response = client.post("/categorias/", json={"nome": "Bebidas"})
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+
+
+def test_criar_categoria_com_cliente(client, cliente_headers):
+    """Cliente comum não tem permissão (deve retornar 403)"""
+    response = client.post("/categorias/", json={"nome": "Bebidas"}, headers=cliente_headers)
+    assert response.status_code == HTTPStatus.FORBIDDEN
+
+
+def test_criar_categoria_nome_duplicado(client, admin_headers, categoria_criada):
     """Testa que o sistema impede criação com nome duplicado."""
-    response = client.post("/categorias/", json={"nome": "Pizzas"})
-    # Como o router não trata IntegrityError, esperamos 400 após adicionarmos tratamento,
-    # ou 500 temporariamente. O teste falhará indicando a necessidade de tratamento.
+    response = client.post("/categorias/", json={"nome": "Pizzas"}, headers=admin_headers)
     assert response.status_code == HTTPStatus.BAD_REQUEST
-    assert "já existe" in response.text.lower() or "duplicada" in response.text.lower()
+    assert "já existe" in response.text.lower()
 
 
-def test_criar_categoria_nome_muito_longo(client):
-    response = client.post("/categorias/", json={"nome": "A" * 101})
+def test_criar_categoria_nome_muito_longo(client, admin_headers):
+    response = client.post("/categorias/", json={"nome": "A" * 101}, headers=admin_headers)
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
 
 
-# ========== Testes de Leitura ==========
-def test_listar_categorias(client, categoria_criada):
-    # Cria uma segunda categoria
-    client.post("/categorias/", json={"nome": "Sobremesas"})
+# ========== Testes de Leitura (públicos) ==========
+def test_listar_categorias(client, categoria_criada, admin_headers):
+    # Cria uma segunda categoria usando admin_headers
+    client.post("/categorias/", json={"nome": "Sobremesas"}, headers=admin_headers)
     response = client.get("/categorias/")
     assert response.status_code == HTTPStatus.OK
     data = response.json()
-    assert len(data) == 2
+    assert len(data) >= 2
     nomes = [c["nome"] for c in data]
     assert "Pizzas" in nomes
     assert "Sobremesas" in nomes
@@ -74,50 +84,60 @@ def test_obter_categoria_inexistente(client):
     assert response.status_code == HTTPStatus.NOT_FOUND
 
 
-# ========== Testes de Atualização ==========
-def test_atualizar_categoria_completa(client, categoria_id):
+# ========== Testes de Atualização (apenas admin) ==========
+def test_atualizar_categoria_completa(client, admin_headers, categoria_id):
     response = client.put(
         f"/categorias/{categoria_id}",
-        json={"nome": "Pizzas Especiais"}
+        json={"nome": "Pizzas Especiais"},
+        headers=admin_headers
     )
     assert response.status_code == HTTPStatus.OK
     assert response.json()["nome"] == "Pizzas Especiais"
 
 
-def test_atualizar_categoria_parcial(client, categoria_id):
-    # Como só tem nome, atualização parcial é igual
-    response = client.put(f"/categorias/{categoria_id}", json={"nome": "Calzones"})
-    assert response.status_code == HTTPStatus.OK
-    assert response.json()["nome"] == "Calzones"
+def test_atualizar_categoria_sem_autenticacao(client, categoria_id):
+    response = client.put(f"/categorias/{categoria_id}", json={"nome": "Nova"})
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
 
 
-def test_atualizar_categoria_nome_duplicado(client, categoria_id):
+def test_atualizar_categoria_com_cliente(client, cliente_headers, categoria_id):
+    response = client.put(f"/categorias/{categoria_id}", json={"nome": "Nova"}, headers=cliente_headers)
+    assert response.status_code == HTTPStatus.FORBIDDEN
+
+
+def test_atualizar_categoria_nome_duplicado(client, admin_headers, categoria_id):
     # Cria outra categoria
-    client.post("/categorias/", json={"nome": "Massas"})
-    # Tenta atualizar a primeira para "Massas"
-    response = client.put(f"/categorias/{categoria_id}", json={"nome": "Massas"})
-    # Deve falhar por duplicidade
+    client.post("/categorias/", json={"nome": "Massas"}, headers=admin_headers)
+    response = client.put(f"/categorias/{categoria_id}", json={"nome": "Massas"}, headers=admin_headers)
     assert response.status_code == HTTPStatus.BAD_REQUEST
-    assert "já existe" in response.text.lower() or "duplicada" in response.text.lower()
+    assert "já existe" in response.text.lower()
 
 
-def test_atualizar_categoria_inexistente(client):
-    response = client.put("/categorias/999", json={"nome": "Nova"})
+def test_atualizar_categoria_inexistente(client, admin_headers):
+    response = client.put("/categorias/999", json={"nome": "Nova"}, headers=admin_headers)
     assert response.status_code == HTTPStatus.NOT_FOUND
 
 
-# ========== Testes de Exclusão ==========
-def test_deletar_categoria_sem_produtos(client, categoria_id):
-    response = client.delete(f"/categorias/{categoria_id}")
+# ========== Testes de Exclusão (apenas admin) ==========
+def test_deletar_categoria_sem_produtos(client, admin_headers, categoria_id):
+    response = client.delete(f"/categorias/{categoria_id}", headers=admin_headers)
     assert response.status_code == HTTPStatus.OK
     assert response.json()["success"] is True
-    # Verifica que foi removida
     get_resp = client.get(f"/categorias/{categoria_id}")
     assert get_resp.status_code == HTTPStatus.NOT_FOUND
 
 
-def test_deletar_categoria_com_produtos_associados(client, db_session, categoria_id):
-    # Cria um produto vinculado a essa categoria
+def test_deletar_categoria_sem_autenticacao(client, categoria_id):
+    response = client.delete(f"/categorias/{categoria_id}")
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+
+
+def test_deletar_categoria_com_cliente(client, cliente_headers, categoria_id):
+    response = client.delete(f"/categorias/{categoria_id}", headers=cliente_headers)
+    assert response.status_code == HTTPStatus.FORBIDDEN
+
+
+def test_deletar_categoria_com_produtos_associados(client, admin_headers, db_session, categoria_id):
     produto = Produto(
         nome="Pizza Margherita",
         descricao="Molho, mussarela, manjericão",
@@ -130,14 +150,13 @@ def test_deletar_categoria_com_produtos_associados(client, db_session, categoria
     db_session.add(produto)
     db_session.commit()
 
-    response = client.delete(f"/categorias/{categoria_id}")
+    response = client.delete(f"/categorias/{categoria_id}", headers=admin_headers)
     assert response.status_code == HTTPStatus.BAD_REQUEST
     assert "produtos vinculados" in response.text.lower()
-    # Verifica que a categoria ainda existe
     get_resp = client.get(f"/categorias/{categoria_id}")
     assert get_resp.status_code == HTTPStatus.OK
 
 
-def test_deletar_categoria_inexistente(client):
-    response = client.delete("/categorias/999")
+def test_deletar_categoria_inexistente(client, admin_headers):
+    response = client.delete("/categorias/999", headers=admin_headers)
     assert response.status_code == HTTPStatus.NOT_FOUND

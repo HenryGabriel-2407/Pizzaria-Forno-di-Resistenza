@@ -29,10 +29,11 @@ def data_validade_passada():
 
 
 @pytest.fixture
-def promo_criado(client, data_validade_futura):
-    """Cria e retorna um código promocional válido."""
+def promo_criado(client, admin_headers, data_validade_futura) -> dict:
+    """Cria e retorna um código promocional válido usando admin_headers."""
     response = client.post(
         "/promocoes/",
+        headers=admin_headers,
         json={
             "codigo": "DESCONTO10",
             "desconto_percentual": 10.0,
@@ -49,10 +50,11 @@ def promo_id(promo_criado) -> int:
     return promo_criado["id"]
 
 
-# ========== Testes de Criação ==========
-def test_criar_promocao_sucesso(client, data_validade_futura):
+# ========== Testes de Criação (requer autenticação) ==========
+def test_criar_promocao_sucesso(client, admin_headers, data_validade_futura):
     response = client.post(
         "/promocoes/",
+        headers=admin_headers,
         json={
             "codigo": "BLACKFRIDAY",
             "desconto_percentual": 20.5,
@@ -68,10 +70,36 @@ def test_criar_promocao_sucesso(client, data_validade_futura):
     assert "id" in data
 
 
-def test_criar_promocao_sem_ativo(client, data_validade_futura):
+def test_criar_promocao_sem_autenticacao(client, data_validade_futura):
+    response = client.post(
+        "/promocoes/",
+        json={
+            "codigo": "SEM_AUTH",
+            "desconto_percentual": 10,
+            "data_validade": data_validade_futura.isoformat(),
+        },
+    )
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+
+
+def test_criar_promocao_com_cliente(client, cliente_headers, data_validade_futura):
+    response = client.post(
+        "/promocoes/",
+        headers=cliente_headers,
+        json={
+            "codigo": "CLIENTE_NAO_PODE",
+            "desconto_percentual": 10,
+            "data_validade": data_validade_futura.isoformat(),
+        },
+    )
+    assert response.status_code == HTTPStatus.FORBIDDEN
+
+
+def test_criar_promocao_sem_ativo(client, admin_headers, data_validade_futura):
     """Deve criar com ativo=True por padrão."""
     response = client.post(
         "/promocoes/",
+        headers=admin_headers,
         json={
             "codigo": "PADRAO",
             "desconto_percentual": 15,
@@ -82,9 +110,10 @@ def test_criar_promocao_sem_ativo(client, data_validade_futura):
     assert response.json()["ativo"] is True
 
 
-def test_criar_promocao_codigo_duplicado(client, data_validade_futura, promo_criado):
+def test_criar_promocao_codigo_duplicado(client, admin_headers, data_validade_futura, promo_criado):
     response = client.post(
         "/promocoes/",
+        headers=admin_headers,
         json={
             "codigo": "DESCONTO10",
             "desconto_percentual": 5,
@@ -95,9 +124,10 @@ def test_criar_promocao_codigo_duplicado(client, data_validade_futura, promo_cri
     assert "já está em uso" in response.text
 
 
-def test_criar_promocao_data_passada(client, data_validade_passada):
+def test_criar_promocao_data_passada(client, admin_headers, data_validade_passada):
     response = client.post(
         "/promocoes/",
+        headers=admin_headers,
         json={
             "codigo": "EXPIRADO",
             "desconto_percentual": 10,
@@ -108,9 +138,10 @@ def test_criar_promocao_data_passada(client, data_validade_passada):
     assert "data de validade deve ser futura" in response.text
 
 
-def test_criar_promocao_desconto_invalido(client, data_validade_futura):
+def test_criar_promocao_desconto_invalido(client, admin_headers, data_validade_futura):
     response = client.post(
         "/promocoes/",
+        headers=admin_headers,
         json={
             "codigo": "INVALIDO",
             "desconto_percentual": 150,
@@ -120,11 +151,12 @@ def test_criar_promocao_desconto_invalido(client, data_validade_futura):
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
 
 
-# ========== Testes de Leitura ==========
-def test_listar_promocoes(client, promo_criado):
-    # Cria um segundo código
+# ========== Testes de Leitura (públicos, sem autenticação) ==========
+def test_listar_promocoes(client, admin_headers, promo_criado):
+    # Cria um segundo código usando admin (autenticado)
     client.post(
         "/promocoes/",
+        headers=admin_headers,
         json={
             "codigo": "DESCONTO20",
             "desconto_percentual": 20,
@@ -141,9 +173,11 @@ def test_listar_promocoes(client, promo_criado):
     assert "DESCONTO20" in codigos
 
 
-def test_listar_promocoes_filtrando_por_ativo(client):
+def test_listar_promocoes_filtrando_por_ativo(client, admin_headers):
+    # Cria usando admin
     client.post(
         "/promocoes/",
+        headers=admin_headers,
         json={
             "codigo": "ATIVO1",
             "desconto_percentual": 10,
@@ -153,6 +187,7 @@ def test_listar_promocoes_filtrando_por_ativo(client):
     )
     client.post(
         "/promocoes/",
+        headers=admin_headers,
         json={
             "codigo": "INATIVO1",
             "desconto_percentual": 15,
@@ -174,10 +209,11 @@ def test_listar_promocoes_filtrando_por_ativo(client):
     assert data[0]["codigo"] == "INATIVO1"
 
 
-def test_listar_promocoes_paginacao(client):
+def test_listar_promocoes_paginacao(client, admin_headers):
     for i in range(1, 6):
         client.post(
             "/promocoes/",
+            headers=admin_headers,
             json={
                 "codigo": f"PROMO{i}",
                 "desconto_percentual": 5,
@@ -203,11 +239,12 @@ def test_obter_promocao_inexistente(client):
     assert response.status_code == HTTPStatus.NOT_FOUND
 
 
-# ========== Testes de Atualização ==========
-def test_atualizar_promocao_completa(client, promo_id, data_validade_futura):
+# ========== Testes de Atualização (requer autenticação) ==========
+def test_atualizar_promocao_completa(client, admin_headers, promo_id, data_validade_futura):
     nova_data = data_validade_futura + timedelta(days=10)
     response = client.put(
         f"/promocoes/{promo_id}",
+        headers=admin_headers,
         json={
             "codigo": "NOVOCODIGO",
             "desconto_percentual": 25.0,
@@ -220,61 +257,79 @@ def test_atualizar_promocao_completa(client, promo_id, data_validade_futura):
     assert data["codigo"] == "NOVOCODIGO"
     assert data["desconto_percentual"] == 25.0
     assert data["ativo"] is False
-    # Comparar datas ignorando milissegundos/segundos
     assert data["data_validade"].startswith(nova_data.strftime("%Y-%m-%dT%H:%M"))
 
 
-def test_atualizar_promocao_parcial(client, promo_id, data_validade_futura):
+def test_atualizar_promocao_sem_autenticacao(client, promo_id):
     response = client.put(f"/promocoes/{promo_id}", json={"ativo": False})
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+
+
+def test_atualizar_promocao_com_cliente(client, cliente_headers, promo_id):
+    response = client.put(f"/promocoes/{promo_id}", json={"ativo": False}, headers=cliente_headers)
+    assert response.status_code == HTTPStatus.FORBIDDEN
+
+
+def test_atualizar_promocao_parcial(client, admin_headers, promo_id):
+    response = client.put(f"/promocoes/{promo_id}", headers=admin_headers, json={"ativo": False})
     assert response.status_code == HTTPStatus.OK
     data = response.json()
     assert data["ativo"] is False
     assert data["codigo"] == "DESCONTO10"  # Não alterado
 
 
-def test_atualizar_promocao_codigo_duplicado(client, promo_id):
-    # Cria outro código
+def test_atualizar_promocao_codigo_duplicado(client, admin_headers, promo_id):
     client.post(
         "/promocoes/",
+        headers=admin_headers,
         json={
             "codigo": "OUTRO",
             "desconto_percentual": 5,
             "data_validade": (datetime.now() + timedelta(days=30)).isoformat(),
         },
     )
-    response = client.put(f"/promocoes/{promo_id}", json={"codigo": "OUTRO"})
+    response = client.put(f"/promocoes/{promo_id}", headers=admin_headers, json={"codigo": "OUTRO"})
     assert response.status_code == HTTPStatus.BAD_REQUEST
     assert "já está em uso" in response.text
 
 
-def test_atualizar_promocao_data_passada(client, promo_id, data_validade_passada):
+def test_atualizar_promocao_data_passada(client, admin_headers, promo_id, data_validade_passada):
     response = client.put(
-        f"/promocoes/{promo_id}", json={"data_validade": data_validade_passada.isoformat()}
+        f"/promocoes/{promo_id}",
+        headers=admin_headers,
+        json={"data_validade": data_validade_passada.isoformat()},
     )
     assert response.status_code == HTTPStatus.BAD_REQUEST
     assert "data de validade deve ser futura" in response.text
 
 
-def test_atualizar_promocao_inexistente(client):
-    response = client.put("/promocoes/999", json={"ativo": False})
+def test_atualizar_promocao_inexistente(client, admin_headers):
+    response = client.put("/promocoes/999", headers=admin_headers, json={"ativo": False})
     assert response.status_code == HTTPStatus.NOT_FOUND
 
 
-# ========== Testes de Exclusão ==========
-def test_deletar_promocao_sem_comandas(client, promo_id):
-    response = client.delete(f"/promocoes/{promo_id}")
+# ========== Testes de Exclusão (requer autenticação) ==========
+def test_deletar_promocao_sem_comandas(client, admin_headers, promo_id):
+    response = client.delete(f"/promocoes/{promo_id}", headers=admin_headers)
     assert response.status_code == HTTPStatus.OK
     assert response.json()["success"] is True
-    # Verifica que não existe mais
     get_resp = client.get(f"/promocoes/{promo_id}")
     assert get_resp.status_code == HTTPStatus.NOT_FOUND
 
 
-def test_deletar_promocao_com_comandas_associadas(client, db_session, promo_id):
-    # Cria um método de pagamento
+def test_deletar_promocao_sem_autenticacao(client, promo_id):
+    response = client.delete(f"/promocoes/{promo_id}")
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+
+
+def test_deletar_promocao_com_cliente(client, cliente_headers, promo_id):
+    response = client.delete(f"/promocoes/{promo_id}", headers=cliente_headers)
+    assert response.status_code == HTTPStatus.FORBIDDEN
+
+
+def test_deletar_promocao_com_comandas_associadas(client, admin_headers, db_session, promo_id):
     metodo = MetodoPagamento(nome="Dinheiro", ativo=True)
     db_session.add(metodo)
-    # Cria cliente e mesa para a comanda
     cliente = Cliente(
         nome="Teste",
         email="teste@email.com",
@@ -287,7 +342,6 @@ def test_deletar_promocao_com_comandas_associadas(client, db_session, promo_id):
     db_session.add_all([cliente, mesa])
     db_session.commit()
 
-    # Cria comanda vinculada ao código promocional
     comanda = Comanda(
         id_cliente=cliente.id,
         id_mesa=mesa.id,
@@ -306,17 +360,20 @@ def test_deletar_promocao_com_comandas_associadas(client, db_session, promo_id):
     db_session.add(comanda)
     db_session.commit()
 
-    # Tenta deletar - deve falhar
-    response = client.delete(f"/promocoes/{promo_id}")
+    response = client.delete(f"/promocoes/{promo_id}", headers=admin_headers)
     assert response.status_code == HTTPStatus.BAD_REQUEST
     assert "já foi utilizado" in response.text or "comanda" in response.text
 
-    # Verifica que o código ainda existe
     get_resp = client.get(f"/promocoes/{promo_id}")
     assert get_resp.status_code == HTTPStatus.OK
 
 
-# ========== Testes de Validação ==========
+def test_deletar_promocao_inexistente(client, admin_headers):
+    response = client.delete("/promocoes/999", headers=admin_headers)
+    assert response.status_code == HTTPStatus.NOT_FOUND
+
+
+# ========== Testes de Validação (públicos) ==========
 def test_validar_promocao_valido(client, promo_criado):
     response = client.post(
         "/promocoes/validar",
@@ -336,16 +393,16 @@ def test_validar_promocao_nao_encontrado(client):
         "/promocoes/validar",
         json={"codigo": "INEXISTENTE", "valor_pedido": 100.0},
     )
-    assert response.status_code == HTTPStatus.OK  # Retorna 200 com valido=False
+    assert response.status_code == HTTPStatus.OK
     data = response.json()
     assert data["valido"] is False
     assert "não encontrado" in data["mensagem"].lower()
 
 
-def test_validar_promocao_inativo(client, data_validade_futura):
-    # Cria código inativo
+def test_validar_promocao_inativo(client, admin_headers, data_validade_futura):
     client.post(
         "/promocoes/",
+        headers=admin_headers,
         json={
             "codigo": "INATIVO",
             "desconto_percentual": 10,
@@ -364,7 +421,6 @@ def test_validar_promocao_inativo(client, data_validade_futura):
 
 
 def test_validar_promocao_expirado(client, data_validade_passada, db_session):
-    # Cria código com data passada
     codigo_expirado = CodPromocional(
         codigo="EXPIRADO",
         desconto_percentual=10.0,
