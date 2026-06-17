@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from http import HTTPStatus
 
 import pytest
@@ -18,14 +18,18 @@ def clean_cod_promocional_table(db_session):
 # Fixtures auxiliares
 @pytest.fixture
 def data_validade_futura():
-    """Retorna uma data 30 dias no futuro."""
-    return datetime.now() + timedelta(days=30)
+    """Retorna uma data (sem horário) 30 dias no futuro.
+
+    O schema de entrada (CodPromocionalCreate/Update) espera `date`, não
+    `datetime` — por isso as fixtures abaixo trabalham com `date.today()`.
+    """
+    return date.today() + timedelta(days=30)
 
 
 @pytest.fixture
 def data_validade_passada():
-    """Retorna uma data 30 dias no passado."""
-    return datetime.now() - timedelta(days=30)
+    """Retorna uma data (sem horário) 30 dias no passado."""
+    return date.today() - timedelta(days=30)
 
 
 @pytest.fixture
@@ -67,6 +71,8 @@ def test_criar_promocao_sucesso(client, admin_headers, data_validade_futura):
     assert data["codigo"] == "BLACKFRIDAY"
     assert data["desconto_percentual"] == 20.5
     assert data["ativo"] is True
+    # A resposta devolve datetime (meia-noite do dia informado)
+    assert data["data_validade"].startswith(data_validade_futura.isoformat())
     assert "id" in data
 
 
@@ -138,6 +144,21 @@ def test_criar_promocao_data_passada(client, admin_headers, data_validade_passad
     assert "data de validade deve ser futura" in response.text
 
 
+def test_criar_promocao_data_hoje(client, admin_headers):
+    """Data de validade igual a hoje deve ser rejeitada (precisa ser estritamente futura)."""
+    response = client.post(
+        "/promocoes/",
+        headers=admin_headers,
+        json={
+            "codigo": "HOJE",
+            "desconto_percentual": 10,
+            "data_validade": date.today().isoformat(),
+        },
+    )
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+    assert "data de validade deve ser futura" in response.text
+
+
 def test_criar_promocao_desconto_invalido(client, admin_headers, data_validade_futura):
     response = client.post(
         "/promocoes/",
@@ -146,6 +167,25 @@ def test_criar_promocao_desconto_invalido(client, admin_headers, data_validade_f
             "codigo": "INVALIDO",
             "desconto_percentual": 150,
             "data_validade": data_validade_futura.isoformat(),
+        },
+    )
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+
+
+def test_criar_promocao_data_com_horario_e_rejeitada(client, admin_headers):
+    """O schema de criação só aceita `date` (YYYY-MM-DD).
+
+    Enviar um datetime completo (com horário) deve falhar na validação do
+    Pydantic com 422, em vez de causar o TypeError de comparação que
+    acontecia antes da correção do router.
+    """
+    response = client.post(
+        "/promocoes/",
+        headers=admin_headers,
+        json={
+            "codigo": "COM_HORARIO",
+            "desconto_percentual": 10,
+            "data_validade": (datetime.now() + timedelta(days=30)).isoformat(),
         },
     )
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
@@ -160,7 +200,7 @@ def test_listar_promocoes(client, admin_headers, promo_criado):
         json={
             "codigo": "DESCONTO20",
             "desconto_percentual": 20,
-            "data_validade": (datetime.now() + timedelta(days=10)).isoformat(),
+            "data_validade": (date.today() + timedelta(days=10)).isoformat(),
             "ativo": False,
         },
     )
@@ -181,7 +221,7 @@ def test_listar_promocoes_filtrando_por_ativo(client, admin_headers):
         json={
             "codigo": "ATIVO1",
             "desconto_percentual": 10,
-            "data_validade": (datetime.now() + timedelta(days=1)).isoformat(),
+            "data_validade": (date.today() + timedelta(days=1)).isoformat(),
             "ativo": True,
         },
     )
@@ -191,7 +231,7 @@ def test_listar_promocoes_filtrando_por_ativo(client, admin_headers):
         json={
             "codigo": "INATIVO1",
             "desconto_percentual": 15,
-            "data_validade": (datetime.now() + timedelta(days=1)).isoformat(),
+            "data_validade": (date.today() + timedelta(days=1)).isoformat(),
             "ativo": False,
         },
     )
@@ -217,7 +257,7 @@ def test_listar_promocoes_paginacao(client, admin_headers):
             json={
                 "codigo": f"PROMO{i}",
                 "desconto_percentual": 5,
-                "data_validade": (datetime.now() + timedelta(days=30)).isoformat(),
+                "data_validade": (date.today() + timedelta(days=30)).isoformat(),
             },
         )
     response = client.get("/promocoes/?limite=2&offset=0")
@@ -257,6 +297,8 @@ def test_atualizar_promocao_completa(client, admin_headers, promo_id, data_valid
     assert data["codigo"] == "NOVOCODIGO"
     assert data["desconto_percentual"] == 25.0
     assert data["ativo"] is False
+    # nova_data é um `date`; strftime com %H:%M funciona normalmente e
+    # resulta em "00:00", já que a resposta é a meia-noite daquele dia.
     assert data["data_validade"].startswith(nova_data.strftime("%Y-%m-%dT%H:%M"))
 
 
@@ -285,7 +327,7 @@ def test_atualizar_promocao_codigo_duplicado(client, admin_headers, promo_id):
         json={
             "codigo": "OUTRO",
             "desconto_percentual": 5,
-            "data_validade": (datetime.now() + timedelta(days=30)).isoformat(),
+            "data_validade": (date.today() + timedelta(days=30)).isoformat(),
         },
     )
     response = client.put(f"/promocoes/{promo_id}", headers=admin_headers, json={"codigo": "OUTRO"})
@@ -421,10 +463,11 @@ def test_validar_promocao_inativo(client, admin_headers, data_validade_futura):
 
 
 def test_validar_promocao_expirado(client, data_validade_passada, db_session):
+
     codigo_expirado = CodPromocional(
         codigo="EXPIRADO",
         desconto_percentual=10.0,
-        data_validade=data_validade_passada,
+        data_validade=datetime.combine(data_validade_passada, time.min),
         ativo=True,
     )
     db_session.add(codigo_expirado)

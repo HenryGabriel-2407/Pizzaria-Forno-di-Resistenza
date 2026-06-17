@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime, time
 from http import HTTPStatus
 from typing import List, Union
 
@@ -47,8 +47,8 @@ def _verificar_codigo_existente(codigo: str, session: Session, exclude_id: int =
         )
 
 
-def _validar_data_validade(data_validade: datetime) -> None:
-    if data_validade <= datetime.now():
+def _validar_data_validade(data_validade: date) -> None:
+    if data_validade <= date.today():
         raise HTTPException(
             status_code=HTTPStatus.BAD_REQUEST,
             detail="A data de validade deve ser futura."
@@ -145,7 +145,10 @@ def criar_promocao(
     _verificar_codigo_existente(promo_data.codigo, session)
     _validar_data_validade(promo_data.data_validade)
 
-    nova_promo = CodPromocional(**promo_data.model_dump())
+    dados = promo_data.model_dump()
+    dados['data_validade'] = datetime.combine(dados['data_validade'], time.min)
+
+    nova_promo = CodPromocional(**dados)
     session.add(nova_promo)
     session.commit()
     session.refresh(nova_promo)
@@ -173,7 +176,11 @@ def atualizar_promocao(
     if dados.data_validade is not None:
         _validar_data_validade(dados.data_validade)
 
-    for campo, valor in dados.model_dump(exclude_unset=True).items():
+    update_data = dados.model_dump(exclude_unset=True)
+    if 'data_validade' in update_data:
+        update_data['data_validade'] = datetime.combine(update_data['data_validade'], time.min)
+
+    for campo, valor in update_data.items():
         setattr(promo, campo, valor)
 
     session.add(promo)

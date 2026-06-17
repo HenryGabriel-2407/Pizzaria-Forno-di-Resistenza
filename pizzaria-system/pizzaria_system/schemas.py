@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import List, Optional
 
@@ -325,24 +325,23 @@ class MetodoPagamentoResponse(MetodoPagamentoBase):
 class CodPromocionalBase(BaseModel):
     codigo: str = Field(..., max_length=50)
     desconto_percentual: float = Field(..., gt=0, le=100)
-    data_validade: datetime
     ativo: bool = True
 
 
 class CodPromocionalCreate(CodPromocionalBase):
-    pass
+    data_validade: date
 
 
 class CodPromocionalResponse(CodPromocionalBase):
     id: int
-
+    data_validade: datetime
     model_config = ConfigDict(from_attributes=True)
 
 
 class CodPromocionalUpdate(BaseModel):
     codigo: Optional[str] = Field(None, max_length=50)
     desconto_percentual: Optional[float] = Field(None, gt=0, le=100)
-    data_validade: Optional[datetime] = None
+    data_validade: Optional[date] = None
     ativo: Optional[bool] = None
 
 
