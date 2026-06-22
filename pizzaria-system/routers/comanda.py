@@ -560,7 +560,7 @@ def atualizar_status_comanda(
     transicoes_validas = {
         'aberta': ['em_preparo', 'cancelada'],
         'em_preparo': ['pronta', 'cancelada'],
-        'pronta': ['entregue', 'cancelada', 'pronta'],
+        'pronta': ['entregue', 'cancelada', 'paga'],
         'entregue': ['paga'],
         'cancelada': [],
         'paga': []
