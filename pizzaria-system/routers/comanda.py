@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from pizzaria_system.audit import log_audit
 from pizzaria_system.database import get_session
+from pizzaria_system.email_utils import send_receipt_email
 from pizzaria_system.models import (
     Cliente,
     CodPromocional,
@@ -186,6 +187,7 @@ def criar_comanda(
     for item in itens_validados:
         pedido_item = PedidoItem(id_comanda=nova_comanda.id, **item)
         session.add(pedido_item)
+        nova_comanda.pedido_itens.append(pedido_item)
 
     _calcular_totais_comanda(nova_comanda)
 
@@ -236,6 +238,7 @@ def listar_comandas(
     status_comanda: Optional[str] = Query(None, description="aberta, em_preparo, pronta, entregue, cancelada, paga"),
     status_pagamento: Optional[str] = Query(None, description="pendente, pago, falhou"),
     tipo_entrega: Optional[str] = Query(None, description="delivery, local"),
+    origem: Optional[str] = Query(None, description="web, mobile_garcom, mobile_cliente"),
     id_cliente: Optional[int] = None,
     id_mesa: Optional[int] = None,
     id_garcom: Optional[int] = None,
@@ -273,6 +276,8 @@ def listar_comandas(
         query = query.where(Comanda.status_pagamento == status_pagamento)
     if tipo_entrega:
         query = query.where(Comanda.tipo_entrega == tipo_entrega)
+    if origem:
+        query = query.where(Comanda.origem == origem)
     if data_inicio:
         query = query.where(Comanda.data_registro >= data_inicio)
     if data_fim:
@@ -405,9 +410,18 @@ def adicionar_item_comanda(
         if comanda.id_cliente != current_user.id:
             raise HTTPException(HTTPStatus.FORBIDDEN, "Você não pode modificar esta comanda.")
 
-    if comanda.status_comanda not in ['aberta']:
+    if comanda.status_comanda not in ['aberta', 'em_preparo']:
         raise HTTPException(HTTPStatus.BAD_REQUEST,
-            "Não é possível adicionar itens a uma comanda já em preparo ou finalizada.")
+            "Não é possível adicionar itens a uma comanda já finalizada.")
+
+    if comanda.status_comanda == 'em_preparo':
+        comanda.status_comanda = 'aberta'
+        _criar_status_log(
+            comanda.id, 'em_preparo', 'aberta',
+            'funcionario' if isinstance(current_user, Funcionario) else 'cliente',
+            current_user.id,
+            "Item adicionado (comanda revertida de em_preparo para aberta)", session
+        )
     # Valida produto/combo
     if not (item_data.id_produto or item_data.id_combo):
         raise HTTPException(HTTPStatus.BAD_REQUEST, "Informe produto ou combo.")
@@ -458,23 +472,30 @@ def atualizar_item_comanda(
     session: Session = Depends(get_session),
     current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
 ):
-    """Atualiza quantidade/observação do item. Apenas se comanda estiver aberta e usuário autorizado."""
+    """Atualiza quantidade/observação do item. Se comanda estiver em 'em_preparo',
+    ela volta automaticamente para 'aberta' e o item é marcado como modificado."""
     item = session.get(PedidoItem, item_id)
     if not item:
         raise HTTPException(HTTPStatus.NOT_FOUND, "Item não encontrado.")
 
-    comanda = item.comanda_rel   # Obtém a comanda associada
+    comanda = item.comanda_rel
 
-    # Permissão: cliente só pode modificar itens de suas próprias comandas
     if isinstance(current_user, Cliente):
         if comanda.id_cliente != current_user.id:
             raise HTTPException(HTTPStatus.FORBIDDEN, "Você não pode modificar este item.")
 
-    if comanda.status_comanda not in ['aberta']:
+    if comanda.status_comanda not in ['aberta', 'em_preparo']:
         raise HTTPException(HTTPStatus.BAD_REQUEST,
-            "Comanda já em preparo ou finalizada, não pode alterar itens.")
+            "Comanda finalizada, não pode alterar itens.")
 
     dados_anteriores = PedidoItemResponse.model_validate(item).model_dump()
+
+    # Reverter para 'aberta' se estiver 'em_preparo'
+    reverteu = False
+    if comanda.status_comanda == 'em_preparo':
+        status_anterior = comanda.status_comanda
+        comanda.status_comanda = 'aberta'
+        reverteu = True
 
     if dados.quantidade is not None:
         item.quantidade = dados.quantidade
@@ -483,7 +504,19 @@ def atualizar_item_comanda(
         item.observacao = dados.observacao
 
     session.add(item)
-    _calcular_totais_comanda(comanda)   # Recalcula totais da comanda
+    _calcular_totais_comanda(comanda)
+
+    # Log de reversão de status
+    if reverteu:
+        obs = f"Item #{item.id} modificado pelo garçom"
+        if dados.quantidade is not None:
+            obs += f" (qtd: {dados_anteriores['quantidade']}→{dados.quantidade})"
+        _criar_status_log(
+            comanda.id, status_anterior, 'aberta',
+            'funcionario' if isinstance(current_user, Funcionario) else 'cliente',
+            current_user.id, obs, session
+        )
+
     session.commit()
     session.refresh(item)
 
@@ -519,9 +552,18 @@ def remover_item_comanda(
         if comanda.id_cliente != current_user.id:
             raise HTTPException(HTTPStatus.FORBIDDEN, "Você não pode remover este item.")
 
-    if comanda.status_comanda not in ['aberta']:
+    if comanda.status_comanda not in ['aberta', 'em_preparo']:
         raise HTTPException(HTTPStatus.BAD_REQUEST,
-            "Comanda já em preparo ou finalizada, não pode remover itens.")
+            "Comanda finalizada, não pode remover itens.")
+
+    if comanda.status_comanda == 'em_preparo':
+        comanda.status_comanda = 'aberta'
+        _criar_status_log(
+            comanda.id, 'em_preparo', 'aberta',
+            'funcionario' if isinstance(current_user, Funcionario) else 'cliente',
+            current_user.id,
+            f"Item #{item.id} removido (comanda revertida de em_preparo para aberta)", session
+        )
 
     dados_anteriores = PedidoItemResponse.model_validate(item).model_dump()
 
@@ -559,8 +601,8 @@ def atualizar_status_comanda(
 
     transicoes_validas = {
         'aberta': ['em_preparo', 'cancelada'],
-        'em_preparo': ['pronta', 'cancelada'],
-        'pronta': ['entregue', 'cancelada', 'paga'],
+        'em_preparo': ['pronta', 'cancelada', 'aberta'],
+        'pronta': ['entregue', 'cancelada', 'paga', 'aberta'],
         'entregue': ['paga'],
         'cancelada': [],
         'paga': []
@@ -580,6 +622,12 @@ def atualizar_status_comanda(
     if novo_status == 'paga':
         comanda.status_pagamento = 'pago'
         comanda.data_finalizacao = datetime.now()
+        # Libera a mesa automaticamente quando a comanda é paga
+        if comanda.id_mesa:
+            mesa = session.get(Mesa, comanda.id_mesa)
+            if mesa and mesa.status != 'livre':
+                mesa.status = 'livre'
+                session.add(mesa)
     elif novo_status == 'cancelada':
         comanda.status_pagamento = 'falhou'
 
@@ -610,7 +658,27 @@ def atualizar_status_comanda(
     )
     session.commit()
     session.refresh(comanda)
+    if novo_status == 'paga':
+        send_receipt_email(comanda)
     return comanda
+
+
+@router.post('/{comanda_id}/enviar-recibo', response_model=MessageResponse)
+def enviar_recibo_email(
+    comanda_id: int,
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user),
+):
+    """Envia o recibo da comanda por e-mail para o cliente cadastrado."""
+    if not isinstance(current_user, Funcionario):
+        raise HTTPException(HTTPStatus.FORBIDDEN, "Apenas funcionários podem enviar recibo.")
+    comanda = _obter_comanda(comanda_id, session)
+    if not comanda.cliente_rel or not comanda.cliente_rel.email:
+        raise HTTPException(HTTPStatus.BAD_REQUEST, "Cliente não possui e-mail cadastrado.")
+    sucesso = send_receipt_email(comanda)
+    if not sucesso:
+        raise HTTPException(HTTPStatus.INTERNAL_SERVER_ERROR, "Erro ao enviar e-mail.")
+    return MessageResponse(message="Recibo enviado com sucesso.")
 
 
 @router.get('/{comanda_id}/status-logs', response_model=List[StatusComandaLogResponse])

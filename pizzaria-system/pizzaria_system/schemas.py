@@ -445,6 +445,7 @@ class ComandaResponse(ComandaBase):
 
 class ComandaUpdate(BaseModel):
     """Atualização parcial da comanda (exceto itens e status)."""
+    id_cliente: Optional[int] = None
     id_metodo_pagamento: Optional[int] = None
     id_cod_promocional: Optional[int] = None
     preco_total: Optional[float] = None

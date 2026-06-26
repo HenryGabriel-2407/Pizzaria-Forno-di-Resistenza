@@ -250,6 +250,8 @@ class PedidoItem:
     quantidade: Mapped[int] = mapped_column(default=1)
 
     comanda_rel: Mapped['Comanda'] = relationship(back_populates='pedido_itens', lazy='joined', init=False)
+    produto_rel: Mapped[Optional['Produto']] = relationship(init=False, foreign_keys=[id_produto])
+    combo_rel: Mapped[Optional['Combo']] = relationship(init=False, foreign_keys=[id_combo])
 
     __table_args__ = (
         CheckConstraint(

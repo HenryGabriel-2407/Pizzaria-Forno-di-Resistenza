@@ -179,6 +179,24 @@ def obter_meu_perfil(
     return _get_cliente_with_enderecos(current_user.id, session)
 
 
+@router.get('/busca', response_model=List[ClienteResponse])
+def buscar_clientes(
+    q: str = Query(..., description="Busca por nome, e-mail ou CPF (parcial, case-insensitive)"),
+    session: Session = Depends(get_session),
+    current_user: Union[Cliente, Funcionario] = Depends(get_current_user)
+):
+    """Busca clientes por nome, e-mail ou CPF. Qualquer funcionário pode usar."""
+    if not isinstance(current_user, Funcionario):
+        raise HTTPException(HTTPStatus.FORBIDDEN, "Apenas funcionários podem buscar clientes.")
+    query = select(Cliente).where(
+        Cliente.nome.ilike(f"%{q}%") |
+        Cliente.email.ilike(f"%{q}%") |
+        Cliente.documento.ilike(f"%{q}%")
+    ).limit(20)
+    clientes = session.scalars(query).all()
+    return clientes
+
+
 @router.get('/{cliente_id}', response_model=ClienteResponse)
 def obter_cliente_por_id(
     cliente_id: int,
